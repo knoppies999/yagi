@@ -10,9 +10,21 @@
   "categories": [
     "SCM Providers"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./out/extension.js",
   "contributes": {
+    "configuration": {
+      "title": "YAGI",
+      "properties": {
+        "yagi.pullAfterOperations": {
+          "type": "boolean",
+          "default": true,
+          "description": "After finishing a push, merge, rebase, cherry-pick or revert, automatically pull the current branch's upstream so the view stays in sync with the remote."
+        }
+      }
+    },
     "commands": [
       {
         "command": "yagi.open",
@@ -23,9 +35,127 @@
         "command": "yagi.refresh",
         "title": "YAGI: Refresh",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "yagi.checkoutBranch",
+        "title": "Checkout",
+        "icon": "$(check)"
+      },
+      {
+        "command": "yagi.mergeBranch",
+        "title": "Merge into current branch",
+        "icon": "$(git-merge)"
+      },
+      {
+        "command": "yagi.rebaseBranch",
+        "title": "Rebase current branch onto this",
+        "icon": "$(git-pull-request)"
+      },
+      {
+        "command": "yagi.deleteBranch",
+        "title": "Delete branch",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "yagi.fetch",
+        "title": "YAGI: Fetch",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "yagi.pull",
+        "title": "YAGI: Pull",
+        "icon": "$(arrow-down)"
+      },
+      {
+        "command": "yagi.push",
+        "title": "YAGI: Push",
+        "icon": "$(arrow-up)"
+      },
+      {
+        "command": "yagi.sidebarRefresh",
+        "title": "YAGI: Refresh Sidebar",
+        "icon": "$(refresh)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "yagi",
+          "title": "YAGI",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "yagi": [
+        {
+          "id": "yagiSidebar",
+          "name": "Git Interface",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "yagiSidebar",
+        "contents": "Open a folder containing a Git repository to get started.\n[$(git-branch) Open YAGI](command:yagi.open)"
       }
     ],
     "menus": {
+      "view/title": [
+        {
+          "command": "yagi.open",
+          "when": "view == yagiSidebar",
+          "group": "navigation@1"
+        },
+        {
+          "command": "yagi.fetch",
+          "when": "view == yagiSidebar",
+          "group": "navigation@2"
+        },
+        {
+          "command": "yagi.pull",
+          "when": "view == yagiSidebar",
+          "group": "navigation@3"
+        },
+        {
+          "command": "yagi.push",
+          "when": "view == yagiSidebar",
+          "group": "navigation@4"
+        },
+        {
+          "command": "yagi.sidebarRefresh",
+          "when": "view == yagiSidebar",
+          "group": "navigation@5"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "yagi.checkoutBranch",
+          "when": "view == yagiSidebar && viewItem == branch",
+          "group": "inline"
+        },
+        {
+          "command": "yagi.checkoutBranch",
+          "when": "view == yagiSidebar && viewItem == branch",
+          "group": "1_actions@1"
+        },
+        {
+          "command": "yagi.mergeBranch",
+          "when": "view == yagiSidebar && viewItem == branch",
+          "group": "1_actions@2"
+        },
+        {
+          "command": "yagi.rebaseBranch",
+          "when": "view == yagiSidebar && viewItem == branch",
+          "group": "1_actions@3"
+        },
+        {
+          "command": "yagi.deleteBranch",
+          "when": "view == yagiSidebar && viewItem == branch",
+          "group": "2_danger@1"
+        }
+      ],
       "editor/title": [
         {
           "command": "yagi.refresh",
@@ -37,12 +167,25 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./"
+    "compile": "tsc -p ./ && node esbuild.js",
+    "compile:host": "tsc -p ./",
+    "compile:webview": "node esbuild.js",
+    "check:webview": "tsc -p webview",
+    "watch": "node esbuild.js --watch"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
     "@types/vscode": "^1.90.0",
+    "esbuild": "^0.28.1",
     "typescript": "^5.4.0"
+  },
+  "dependencies": {
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true
   }
 }

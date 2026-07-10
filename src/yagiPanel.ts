@@ -1,5 +1,13 @@
 import * as vscode from "vscode";
-import { GitService } from "./gitService";
+import * as path from "path";
+import { GitService, OperationType } from "./gitService";
+import { openWorkingDiff, openCommitFileDiff } from "./diffProvider";
+import { setBranch } from "./statusBar";
+import { findGitRepos } from "./repoFinder";
+import { autoPullIfEnabled } from "./gitOps";
+
+// globalState key for the persisted, per-user pane layout.
+const LAYOUT_KEY = "yagi.layout";
 
 /**
  * Owns the YAGI webview panel: builds its HTML, pushes repo data into it,
@@ -8,7 +16,12 @@ import { GitService } from "./gitService";
 export class YagiPanel {
   public static current: YagiPanel | undefined;
   private readonly panel: vscode.WebviewPanel;
-  private git!: GitService;
+  private git: GitService | undefined;
+  private root = "";
+  private openedFolder = "";
+  private attempted = false; // have we tried to locate a repo yet?
+  private commitLimit = 200; // grows as the user loads more history
+  private debounce: NodeJS.Timeout | undefined;
   private disposables: vscode.Disposable[] = [];
 
   static createOrShow(context: vscode.ExtensionContext) {
@@ -43,7 +56,7 @@ export class YagiPanel {
       this.panel.dispose();
       return;
     }
-    this.git = new GitService(folder.uri.fsPath);
+    this.openedFolder = folder.uri.fsPath;
 
     this.panel.webview.html = this.getHtml();
     this.panel.webview.onDidReceiveMessage(
@@ -52,6 +65,81 @@ export class YagiPanel {
       this.disposables
     );
     this.panel.onDidDispose(() => this.dispose(), null, this.disposables);
+    this.setupWorkingTreeWatcher(folder);
+  }
+
+  /** The resolved git service; throws (caught → error toast) if no repo yet. */
+  private get svc(): GitService {
+    if (!this.git) {
+      throw new Error("No Git repository is active.");
+    }
+    return this.git;
+  }
+
+  private refreshDebounced = () => {
+    if (this.debounce) {
+      clearTimeout(this.debounce);
+    }
+    this.debounce = setTimeout(() => this.sendState(), 300);
+  };
+
+  /**
+   * Locate the repository. Handles three cases: the opened folder IS a repo (or
+   * lives inside one), or it merely CONTAINS repos in subfolders — in which
+   * case we adopt the only one, or ask the user to choose among several.
+   */
+  private async resolveRepo(): Promise<void> {
+    // git rev-parse also succeeds when the opened folder is inside a repo.
+    let root = await new GitService(this.openedFolder).getRepoRoot();
+    if (!root) {
+      const repos = findGitRepos(this.openedFolder);
+      if (repos.length === 1) {
+        root = repos[0];
+      } else if (repos.length > 1) {
+        const pick = await vscode.window.showQuickPick(
+          repos.map((r) => ({
+            label: path.basename(r),
+            description: r,
+            root: r,
+          })),
+          { placeHolder: "Multiple Git repositories found — choose one for YAGI" }
+        );
+        root = pick?.root ?? null;
+      }
+    }
+    if (root) {
+      this.root = root;
+      this.git = new GitService(root);
+      this.setupGitDirWatcher();
+    }
+  }
+
+  /** Watch working-tree edits (covers subfolder repos too). */
+  private setupWorkingTreeWatcher(folder: vscode.WorkspaceFolder) {
+    const w = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(folder, "**/*")
+    );
+    w.onDidChange(this.refreshDebounced, null, this.disposables);
+    w.onDidCreate(this.refreshDebounced, null, this.disposables);
+    w.onDidDelete(this.refreshDebounced, null, this.disposables);
+    this.disposables.push(w);
+  }
+
+  /** Watch .git for branch switch / commit / merge-rebase progress. */
+  private async setupGitDirWatcher() {
+    if (!this.git) return;
+    try {
+      const gitDir = await this.svc.getGitDir();
+      const w = vscode.workspace.createFileSystemWatcher(
+        new vscode.RelativePattern(gitDir, "**")
+      );
+      w.onDidChange(this.refreshDebounced, null, this.disposables);
+      w.onDidCreate(this.refreshDebounced, null, this.disposables);
+      w.onDidDelete(this.refreshDebounced, null, this.disposables);
+      this.disposables.push(w);
+    } catch {
+      /* ignore */
+    }
   }
 
   /** Handle a message posted from the webview. */
@@ -59,28 +147,184 @@ export class YagiPanel {
     try {
       switch (msg.type) {
         case "ready":
-        case "refresh":
+          this.post({
+            type: "layout",
+            layout: this.context.globalState.get(LAYOUT_KEY) ?? null,
+          });
           await this.sendState();
           break;
+        case "refresh":
+          this.attempted = false; // let an explicit refresh re-scan for repos
+          await this.sendState();
+          break;
+        case "loadMore":
+          this.commitLimit += 300;
+          await this.sendState();
+          break;
+        case "saveLayout":
+          await this.context.globalState.update(LAYOUT_KEY, msg.layout);
+          break;
         case "stage":
-          await this.git.stage(msg.path);
+          await this.svc.stage(msg.path);
           await this.sendState();
           break;
         case "unstage":
-          await this.git.unstage(msg.path);
+          await this.svc.unstage(msg.path);
           await this.sendState();
           break;
         case "commit":
-          await this.git.commit(msg.message);
+          await this.svc.commit(msg.message);
           await this.sendState();
           break;
         case "checkout":
-          await this.git.checkout(msg.branch);
+          await this.svc.checkout(msg.branch);
           await this.sendState();
           break;
-        case "diff": {
-          const patch = await this.git.getDiff(msg.path, msg.staged);
-          this.post({ type: "diff", path: msg.path, patch });
+
+        // --- remotes ------------------------------------------------------
+        case "fetch":
+          await this.withProgress("Fetching…", () => this.svc.fetch());
+          await this.sendState();
+          break;
+        case "pull":
+          // Explicit pull: don't auto-pull again afterwards.
+          await this.tryOp(
+            () => this.withProgress("Pulling…", () => this.svc.pull()),
+            "Pull",
+            false
+          );
+          break;
+        case "push":
+          await this.tryOp(
+            () => this.withProgress("Pushing…", () => this.svc.push()),
+            "Push"
+          );
+          break;
+
+        // --- interactive rebase -------------------------------------------
+        case "requestRebase": {
+          const entries = await this.svc.getRebaseTodo(msg.base);
+          if (!entries.length) {
+            vscode.window.showInformationMessage(
+              "No commits after that one to rebase."
+            );
+          } else {
+            this.post({ type: "rebaseTodo", base: msg.base, entries });
+          }
+          break;
+        }
+        case "applyRebase":
+          await this.tryOp(
+            () => this.svc.interactiveRebase(msg.base, msg.todo),
+            "Interactive rebase"
+          );
+          break;
+
+        // --- diffs & conflicts open in native VS Code editors -------------
+        case "openDiff":
+          await openWorkingDiff(this.root, msg.path, msg.staged);
+          break;
+        case "openConflict":
+          // The real file has conflict markers; VS Code shows its merge editor.
+          await vscode.window.showTextDocument(
+            vscode.Uri.file(path.join(this.root, msg.path))
+          );
+          break;
+
+        // --- commit details -----------------------------------------------
+        case "commitDetails": {
+          const details = await this.svc.getCommitDetails(msg.hash);
+          this.post({ type: "commitDetails", details });
+          break;
+        }
+        case "openCommitDiff":
+          await openCommitFileDiff(this.root, msg.hash, msg.path);
+          break;
+
+        // --- history operations (may pause on conflict) -------------------
+        case "cherryPick":
+          await this.tryOp(() => this.svc.cherryPick(msg.hash), "Cherry-pick");
+          break;
+        case "revert":
+          await this.tryOp(() => this.svc.revert(msg.hash), "Revert");
+          break;
+        case "merge":
+          await this.tryOp(() => this.svc.merge(msg.branch), "Merge");
+          break;
+        case "rebase":
+          await this.tryOp(() => this.svc.rebase(msg.branch), "Rebase");
+          break;
+
+        // --- operation control --------------------------------------------
+        case "continueOp":
+          await this.tryOp(
+            () => this.svc.continueOp(msg.op as OperationType),
+            "Continue"
+          );
+          break;
+        case "abortOp":
+          await this.svc.abortOp(msg.op as OperationType);
+          await this.sendState();
+          break;
+        case "skipOp":
+          await this.tryOp(
+            () => this.svc.skipOp(msg.op as OperationType),
+            "Skip"
+          );
+          break;
+
+        // --- branch & reset (native prompts / confirmations) --------------
+        case "createBranch": {
+          const name = await vscode.window.showInputBox({
+            prompt: `New branch at ${msg.hash?.slice(0, 7) ?? "HEAD"}`,
+            validateInput: (v) =>
+              /\s/.test(v) ? "Branch names can't contain spaces" : null,
+          });
+          if (name) {
+            await this.svc.createBranch(name, msg.hash);
+            await this.sendState();
+          }
+          break;
+        }
+        case "deleteBranch": {
+          const ok = await vscode.window.showWarningMessage(
+            `Delete branch "${msg.branch}"?`,
+            { modal: true },
+            "Delete"
+          );
+          if (ok === "Delete") {
+            try {
+              await this.svc.deleteBranch(msg.branch, false);
+            } catch {
+              // Not fully merged — offer a force delete.
+              const force = await vscode.window.showWarningMessage(
+                `"${msg.branch}" isn't fully merged. Force delete?`,
+                { modal: true },
+                "Force delete"
+              );
+              if (force === "Force delete") {
+                await this.svc.deleteBranch(msg.branch, true);
+              }
+            }
+            await this.sendState();
+          }
+          break;
+        }
+        case "reset": {
+          const mode = msg.mode as "soft" | "mixed" | "hard";
+          const confirm =
+            mode === "hard"
+              ? await vscode.window.showWarningMessage(
+                  `Hard reset to ${msg.hash.slice(0, 7)}? This discards ` +
+                    `uncommitted changes.`,
+                  { modal: true },
+                  "Reset (hard)"
+                )
+              : "ok";
+          if (confirm) {
+            await this.svc.resetTo(msg.hash, mode);
+            await this.sendState();
+          }
           break;
         }
       }
@@ -89,19 +333,73 @@ export class YagiPanel {
     }
   }
 
+  /**
+   * Run a history operation that may legitimately fail with conflicts.
+   * Either way we refresh, so the operation banner + conflicts appear;
+   * conflicts are reported as info, not a scary error.
+   */
+  private async tryOp(
+    fn: () => Thenable<string>,
+    label: string,
+    autoPull = true
+  ) {
+    try {
+      await fn();
+      if (autoPull) {
+        await this.maybeAutoPull();
+      }
+    } catch (err: any) {
+      const op = await this.svc.getOperation();
+      if (op && op.conflicted.length) {
+        vscode.window.showInformationMessage(
+          `${label} paused: resolve ${op.conflicted.length} conflict(s), ` +
+            `then Continue.`
+        );
+      } else {
+        vscode.window.showErrorMessage(`${label} failed: ${err.message ?? err}`);
+      }
+    }
+    await this.sendState();
+  }
+
+  /**
+   * After a successful operation, pull the current branch's upstream so the
+   * view reflects the remote too. Gated by the `yagi.pullAfterOperations`
+   * setting (default on) and only runs when an upstream is configured.
+   */
+  private async maybeAutoPull() {
+    await autoPullIfEnabled(this.svc);
+  }
+
+  /** Run a network op with a VS Code progress notification. */
+  private withProgress<T>(title: string, fn: () => Promise<T>): Thenable<T> {
+    return vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title },
+      fn
+    );
+  }
+
   /** Gather the full repo snapshot and push it to the UI. */
   private async sendState() {
-    const root = await this.git.getRepoRoot();
-    if (!root) {
-      this.post({ type: "notRepo" });
+    // Resolve the repository once (or again after an explicit refresh).
+    if (!this.git && !this.attempted) {
+      this.attempted = true;
+      await this.resolveRepo();
+    }
+    if (!this.git) {
+      this.post({ type: "notRepo", path: this.openedFolder });
       return;
     }
-    const [commits, status, branches] = await Promise.all([
-      this.git.getLog(),
-      this.git.getStatus(),
-      this.git.getBranches(),
+    const [commits, status, branches, operation] = await Promise.all([
+      this.svc.getLog(this.commitLimit),
+      this.svc.getStatus(),
+      this.svc.getBranches(),
+      this.svc.getOperation(),
     ]);
-    this.post({ type: "state", commits, status, branches });
+    setBranch(branches.find((b) => b.current)?.name);
+    // If we filled the limit, there are (probably) older commits to load.
+    const hasMore = commits.length >= this.commitLimit;
+    this.post({ type: "state", commits, status, branches, operation, hasMore });
   }
 
   private post(message: any) {
@@ -133,25 +431,8 @@ export class YagiPanel {
   <title>YAGI</title>
 </head>
 <body>
-  <div id="app">
-    <aside id="sidebar">
-      <h2>Branches</h2>
-      <ul id="branches"></ul>
-    </aside>
-    <main id="graph-pane">
-      <h2>History</h2>
-      <div id="graph"></div>
-    </main>
-    <section id="changes-pane">
-      <h2>Changes</h2>
-      <div class="group"><h3>Staged</h3><ul id="staged"></ul></div>
-      <div class="group"><h3>Unstaged</h3><ul id="unstaged"></ul></div>
-      <textarea id="commit-msg" placeholder="Commit message"></textarea>
-      <button id="commit-btn">Commit</button>
-      <pre id="diff"></pre>
-    </section>
-  </div>
-  <script nonce="${nonce}" src="${uri("main.js")}"></script>
+  <div id="root"></div>
+  <script nonce="${nonce}" src="${uri("webview.js")}"></script>
 </body>
 </html>`;
   }
@@ -159,6 +440,9 @@ export class YagiPanel {
   dispose() {
     YagiPanel.current = undefined;
     vscode.commands.executeCommand("setContext", "yagiActive", false);
+    if (this.debounce) {
+      clearTimeout(this.debounce);
+    }
     this.panel.dispose();
     while (this.disposables.length) {
       this.disposables.pop()?.dispose();
