@@ -1,0 +1,48 @@
+{
+  "name": "yagi",
+  "displayName": "YAGI — Yet Another Git Interface",
+  "description": "A Fork-like graphical Git client inside VS Code.",
+  "version": "0.0.1",
+  "publisher": "yagi-dev",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "SCM Providers"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "yagi.open",
+        "title": "YAGI: Open Git Interface",
+        "icon": "$(git-branch)"
+      },
+      {
+        "command": "yagi.refresh",
+        "title": "YAGI: Refresh",
+        "icon": "$(refresh)"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "yagi.refresh",
+          "when": "yagiActive",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.4.0"
+  }
+}

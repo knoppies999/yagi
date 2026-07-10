@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git init *)",
+      "Bash(git add *)",
+      "Bash(git -c user.name=YAGI -c user.email=yagi@local commit -qm \"Initial YAGI scaffold: webview panel, git service, commit graph\")"
+    ]
+  }
+}
