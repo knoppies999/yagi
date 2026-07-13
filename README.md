@@ -1,55 +1,99 @@
+<div align="center">
+
 # YAGI — Yet Another Git Interface
 
-A Fork-like graphical Git client that lives **inside VS Code**. YAGI renders the
-commit graph, staging area, and branch/remote management as a webview, driven by
-an extension host that shells out to the `git` CLI.
+**A Fork-style graphical Git client that lives inside VS Code.**
+
+Commit graph. Staging. Merge conflicts. Interactive rebase. Remotes.
+No app-switching, no separate window — just your editor.
+
+[![Version](https://img.shields.io/visual-studio-marketplace/v/yagi-dev.yagi?label=Marketplace&color=0098FF)](https://marketplace.visualstudio.com/items?itemName=yagi-dev.yagi)
+[![Installs](https://img.shields.io/visual-studio-marketplace/i/yagi-dev.yagi?color=0098FF)](https://marketplace.visualstudio.com/items?itemName=yagi-dev.yagi)
+[![Rating](https://img.shields.io/visual-studio-marketplace/r/yagi-dev.yagi?color=0098FF)](https://marketplace.visualstudio.com/items?itemName=yagi-dev.yagi)
+[![License: MIT](https://img.shields.io/badge/license-MIT-brightgreen.svg)](LICENSE)
+
+</div>
+
+---
+
+## Why YAGI?
+
+VS Code's built-in Source Control view is great for a quick commit, but the
+moment you need to **untangle history**, **resolve a real merge conflict**, or
+**rebase interactively**, you reach for a separate app. YAGI closes that gap —
+it brings a full, Fork-like Git GUI into an editor tab, wired directly to your
+workspace.
+
+- **Stay in one window.** No context switch to a separate Git client.
+- **Everything is native underneath.** Diffs open in VS Code's own diff
+  editor; conflicts open in its 3-way merge editor. You get YAGI's graph and
+  workflow on top of tools you already know.
+- **It's just `git`.** Every action shells out to the Git CLI you already
+  have installed — no bundled Git, no proprietary format.
 
 ## Features
 
-- **Commit graph** with colored lanes, virtualized for large histories and
-  incremental **“load more”** paging.
-- **Commit details** — click any commit for its metadata, message, and changed
-  files; click a file to open a native diff.
-- **Staging area** — stage/unstage files, view diffs in VS Code's diff editor,
-  resolve conflicts in the 3-way merge editor, and commit.
-- **History operations** — cherry-pick, revert, merge, and rebase (including an
-  **interactive rebase** UI with reorder / squash / fixup / drop).
-- **Conflict-aware operations** — a banner surfaces paused merge/rebase/
-  cherry-pick with Continue / Skip / Abort.
-- **Remotes** — fetch, pull, push with ahead/behind tracking, plus optional
-  auto-pull after operations (`yagi.pullAfterOperations`).
-- **Interactive sidebar** — current branch, changes, and a branch tree with
-  checkout / merge / rebase / delete actions.
-- **Resizable & collapsible panes**, persisted per-user, plus a branch filter.
-- **Repository discovery** — finds a repo in subfolders of the opened folder,
-  or prompts when several exist.
+### 📊 Commit graph
+A colored-lane commit graph that stays fast on large repositories —
+rendering is virtualized, and history loads incrementally as you scroll
+("load more" paging), so a 50,000-commit repo opens as quickly as a 50-commit
+one.
 
-## Architecture
+### 🔍 Commit details
+Click any commit to see its full message, author, parents, and changed
+files — click a file to open it in VS Code's native diff editor.
 
-```
-Extension host (Node)                Webview (React + esbuild)
-  extension.ts   commands, sidebar     App.tsx        3-pane layout
-  yagiPanel.ts   owns the webview      components/    Graph, Changes, …
-  gitService.ts  wraps the git CLI     graph.ts       lane assignment
-  diffProvider   virtual diff docs     messages.ts    typed postMessage
-  sidebar.ts     Activity Bar tree
-```
+### ✅ Staging & commit
+Stage and unstage files, view diffs natively, and commit — with `Ctrl/Cmd+Enter`
+to commit without leaving the keyboard.
 
-`src/types.ts` is shared by both sides, so every `postMessage` payload is typed
-end-to-end.
+### 🔀 Merge, rebase, cherry-pick, revert
+- One-click **merge** and **rebase** from the branch list.
+- **Cherry-pick** and **revert** any commit from its context menu.
+- A full **interactive rebase** UI — reorder, squash, fixup, or drop commits
+  with drag-free up/down controls, no manual todo-file editing.
+- Conflicts pause the operation with a clear banner and
+  **Continue / Skip / Abort** — conflicted files open directly in VS Code's
+  3-way merge editor.
 
-## Develop
+### ☁️ Remotes
+Fetch, pull, and push with live ahead/behind indicators. Optionally
+auto-pull after any operation finishes, so your view never falls out of
+sync with the remote (`yagi.pullAfterOperations`).
 
-```bash
-npm install
-npm run compile      # tsc (host) + esbuild (webview bundle)
-npm run watch        # rebuild the webview on change
-```
+### 🗂️ Built for your workflow
+- An **Activity Bar sidebar** mirrors the current branch, changed files, and
+  full branch tree — for quick actions without opening the full panel.
+- **Resizable, collapsible panes** remembered forever, per user.
+- A **branch filter** so repositories with 100+ branches stay navigable.
+- Automatic **repository discovery**: open a parent folder containing
+  several repos and YAGI finds them (or lets you pick).
 
-Press **F5** to launch an Extension Development Host, open a Git repo, and run
-**YAGI: Open Git Interface** (or click the YAGI icon in the Activity Bar).
+## Getting started
+
+1. Install **YAGI** from the Marketplace.
+2. Open a folder containing a Git repository.
+3. Click the **YAGI icon** in the Activity Bar, or run
+   **YAGI: Open Git Interface** from the Command Palette.
+
+That's it — no configuration required.
+
+## Settings
+
+| Setting | Default | Description |
+|---|---|---|
+| `yagi.pullAfterOperations` | `true` | After push, merge, rebase, cherry-pick, or revert, automatically pull the current branch's upstream. |
 
 ## Requirements
 
-- VS Code 1.90+
-- `git` on your `PATH`
+- VS Code 1.90 or later
+- `git` available on your `PATH`
+
+## Feedback & contributions
+
+YAGI is open source. Bug reports, feature requests, and pull requests are
+welcome at [github.com/knoppies999/yagi](https://github.com/knoppies999/yagi).
+
+## License
+
+[MIT](LICENSE)
