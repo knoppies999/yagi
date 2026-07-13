@@ -153,12 +153,20 @@ export class SidebarProvider implements vscode.TreeDataProvider<Node> {
         item.iconPath = new vscode.ThemeIcon(
           f.conflicted ? "warning" : "diff-modified"
         );
-        item.command = {
-          command: "yagi.openFileDiff",
-          title: "Open Diff",
-          arguments: [f.path, f.staged],
-        };
-        item.contextValue = "file";
+        item.command = f.conflicted
+          ? {
+              command: "yagi.openConflict",
+              title: "Open Merge Editor",
+              arguments: [f.path],
+            }
+          : {
+              command: "yagi.openFileDiff",
+              title: "Open Diff",
+              arguments: [f.path, f.staged],
+            };
+        // Conflicts get their own contextValue so the right-click menu can
+        // offer Accept Incoming/Outgoing only where it makes sense.
+        item.contextValue = f.conflicted ? "conflictFile" : "file";
         return item;
       }
       case "branch": {

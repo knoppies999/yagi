@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import * as path from "path";
 import { YagiPanel } from "./yagiPanel";
 import { GitContentProvider, YAGI_SCHEME, openWorkingDiff } from "./diffProvider";
 import { initStatusBar, setBranch } from "./statusBar";
@@ -29,6 +30,20 @@ export function activate(context: vscode.ExtensionContext) {
       return (arg as { branch: { name: string } }).branch.name;
     }
     return undefined;
+  };
+
+  // Context-menu commands invoked on a multi-selected tree view receive
+  // (clickedElement, allSelectedElements). Collapse that into file paths,
+  // falling back to just the clicked element when nothing else is selected.
+  const filePaths = (first: unknown, all: unknown): string[] => {
+    const nodes = Array.isArray(all) && all.length ? all : [first];
+    const paths: string[] = [];
+    for (const n of nodes) {
+      if (n && typeof n === "object" && "file" in (n as any)) {
+        paths.push((n as any).file.path as string);
+      }
+    }
+    return paths;
   };
 
   const withProgress = <T>(title: string, fn: () => Promise<T>) =>
@@ -65,7 +80,12 @@ export function activate(context: vscode.ExtensionContext) {
       YAGI_SCHEME,
       new GitContentProvider()
     ),
-    vscode.window.registerTreeDataProvider("yagiSidebar", sidebar),
+    // canSelectMany enables native ctrl/shift-click multi-select, so a
+    // right-click context menu command can act on several conflicts at once.
+    vscode.window.createTreeView("yagiSidebar", {
+      treeDataProvider: sidebar,
+      canSelectMany: true,
+    }),
 
     vscode.commands.registerCommand("yagi.open", () =>
       YagiPanel.createOrShow(context)
@@ -176,7 +196,54 @@ export function activate(context: vscode.ExtensionContext) {
         const repo = await sidebar.getRepo();
         if (repo) await openWorkingDiff(repo.root, filePath, staged);
       }
-    )
+    ),
+    vscode.commands.registerCommand(
+      "yagi.openConflict",
+      async (filePath: string) => {
+        const repo = await sidebar.getRepo();
+        if (repo) {
+          await vscode.window.showTextDocument(
+            vscode.Uri.file(path.join(repo.root, filePath))
+          );
+        }
+      }
+    ),
+
+    vscode.commands.registerCommand("yagi.acceptIncoming", async (first, all) => {
+      const git = await sidebar.getService();
+      const paths = filePaths(first, all);
+      if (!git || !paths.length) return;
+      try {
+        await git.resolveConflicts(paths, "theirs");
+      } catch (err: any) {
+        vscode.window.showErrorMessage(`Resolve failed: ${err.message ?? err}`);
+      }
+      refreshAll();
+    }),
+    vscode.commands.registerCommand("yagi.acceptOutgoing", async (first, all) => {
+      const git = await sidebar.getService();
+      const paths = filePaths(first, all);
+      if (!git || !paths.length) return;
+      try {
+        await git.resolveConflicts(paths, "ours");
+      } catch (err: any) {
+        vscode.window.showErrorMessage(`Resolve failed: ${err.message ?? err}`);
+      }
+      refreshAll();
+    }),
+    vscode.commands.registerCommand("yagi.markResolved", async (first, all) => {
+      const git = await sidebar.getService();
+      const paths = filePaths(first, all);
+      if (!git || !paths.length) return;
+      for (const p of paths) {
+        try {
+          await git.stage(p);
+        } catch (err: any) {
+          vscode.window.showErrorMessage(`Stage failed: ${err.message ?? err}`);
+        }
+      }
+      refreshAll();
+    })
   );
 
   // Keep the sidebar and status bar fresh as the repo changes on disk.
