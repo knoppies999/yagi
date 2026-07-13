@@ -34,7 +34,8 @@ export type OutMsg =
   | { type: "requestRebase"; base: string }
   | { type: "applyRebase"; base: string; todo: string[] }
   | { type: "saveLayout"; layout: Layout }
-  | { type: "loadMore" };
+  | { type: "loadMore" }
+  | { type: "resolveConflicts"; paths: string[]; resolution: "ours" | "theirs" };
 
 export interface RebaseEntry {
   hash: string;

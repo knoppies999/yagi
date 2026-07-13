@@ -233,6 +233,7 @@ export function App() {
           <Changes
             status={status}
             onCollapse={() => toggleCollapse("collapsedChanges")}
+            onMenu={showMenu}
           />
         )}
       </div>

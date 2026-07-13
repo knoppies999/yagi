@@ -217,6 +217,16 @@ export class YagiPanel {
             vscode.Uri.file(path.join(this.root, msg.path))
           );
           break;
+        case "resolveConflicts":
+          try {
+            await this.svc.resolveConflicts(msg.paths, msg.resolution);
+          } catch (err: any) {
+            vscode.window.showErrorMessage(
+              `Resolve failed: ${err.message ?? err}`
+            );
+          }
+          await this.sendState();
+          break;
 
         // --- commit details -----------------------------------------------
         case "commitDetails": {

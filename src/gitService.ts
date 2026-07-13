@@ -328,6 +328,39 @@ export class GitService {
     return this.run([op, "--skip"]);
   }
 
+  /**
+   * Bulk-resolve conflicted paths by taking one side wholesale — "accept all
+   * incoming" (theirs) or "accept all outgoing" (ours). Most conflicts
+   * (content, or both-added) have both sides available via
+   * `checkout --ours/--theirs`; a delete/modify conflict only has one side,
+   * so when the chosen side is the one that deleted the file, we fall back
+   * to removing it instead.
+   */
+  async resolveConflicts(
+    paths: string[],
+    resolution: "ours" | "theirs"
+  ): Promise<void> {
+    const flag = resolution === "ours" ? "--ours" : "--theirs";
+    const restored: string[] = [];
+    const deleted: string[] = [];
+    for (const p of paths) {
+      try {
+        await this.run(["checkout", flag, "--", p]);
+        restored.push(p);
+      } catch {
+        // No blob for this side (delete/modify conflict) — resolving to it
+        // means the file should end up deleted.
+        deleted.push(p);
+      }
+    }
+    if (restored.length) {
+      await this.run(["add", "--", ...restored]);
+    }
+    for (const p of deleted) {
+      await this.run(["rm", "-f", "--", p]);
+    }
+  }
+
   // ---- remotes ------------------------------------------------------------
 
   async getCurrentBranch(): Promise<string> {

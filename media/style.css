@@ -470,6 +470,27 @@ button.danger {
   color: var(--vscode-gitDecoration-conflictingResourceForeground, #e06c75);
   font-weight: 700;
 }
+.file.selected {
+  background: var(--vscode-list-activeSelectionBackground);
+  color: var(--vscode-list-activeSelectionForeground);
+}
+.group-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+.group-header h3 {
+  margin: 10px 0 5px;
+}
+.group-action {
+  font-size: 10px;
+  opacity: 0.6;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.group-action:hover {
+  opacity: 1;
+}
 .file .name {
   flex: 1;
   cursor: pointer;
