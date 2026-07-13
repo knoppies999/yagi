@@ -2,23 +2,35 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-YAGI is a VS Code extension: a Fork-style Git GUI (commit graph, staging, rebase, remotes). Every Git action shells out to the `git` CLI. There are no tests and no linter — the verification gates below are the only safety net. Run them.
+YAGI is a VS Code extension: a Fork-style Git GUI (commit graph, staging, rebase, remotes). Every Git action shells out to the `git` CLI. The verification gates below (typecheck, lint, test) are the safety net. Run them.
 
 ## Verification gates (run after every code change, in order)
 
 1. `npm run compile` — typechecks the extension host (`src/` → `out/`) AND bundles the webview. Must exit 0.
 2. `npm run check:webview` — typechecks `webview/` (esbuild in step 1 does NOT typecheck it; skipping this ships type errors silently). Must exit 0.
-3. Manual smoke test when behavior changed: F5 in VS Code ("Run YAGI Extension") → run "YAGI: Open Git Interface" → exercise the changed feature.
+3. `npm run lint` — ESLint (type-aware) over `src` and `webview`. Must exit 0 (warnings are allowed; errors are not).
+4. `npm run test` — Vitest, both projects (host + webview). Must exit 0.
+5. Manual smoke test when behavior changed: F5 in VS Code ("Run YAGI Extension") → run "YAGI: Open Git Interface" → exercise the changed feature.
 
-A change is complete only when steps 1 and 2 both exit 0. If you edited `webview/` and only ran step 1, the task is NOT verified.
+`npm run check` runs steps 1–4 in one go. A change is complete only when steps 1–4 all exit 0. If you edited `webview/` and only ran step 1, the task is NOT verified.
 
 ## Commands
 
+- `npm run check` — the full gate: compile + check:webview + lint + test
 - `npm run compile` — full build (host tsc + webview esbuild)
 - `npm run compile:host` / `npm run compile:webview` — one half only
 - `npm run check:webview` — typecheck webview (required; not part of `compile`)
+- `npm run lint` — ESLint flat config (`eslint.config.mjs`), type-aware
+- `npm run test` — Vitest once; `npm run test:watch` for watch mode
 - `npm run watch` — esbuild watch for the webview only (does not watch `src/`)
 - `npx vsce package` — build the .vsix
+
+## Testing
+
+- Vitest, two projects in `vitest.config.ts`: **host** (`environment: node`, `src/**/*.test.ts`) and **webview** (`environment: jsdom`, `webview/**/*.test.{ts,tsx}`). Tests are colocated (`foo.test.ts` next to `foo.ts`).
+- Import vitest APIs explicitly (`import { describe, it, expect } from "vitest"`) — globals are off, so neither tsconfig needs vitest type injection.
+- The `vscode` module can't be imported in a test (it only exists in the extension host). Keep test targets pure. Git-output parsing lives in `src/gitParsing.ts` (pure string→type functions, no `spawn`/`fs`); `GitService` delegates to it. New parsing logic goes there so it stays testable with fixture strings.
+- Root `tsconfig.json` **excludes** `**/*.test.ts`/`src/test/**` so tests don't emit into `out/`. Test files are also excluded from lint (the excluded build tsconfig can't type them); Vitest validates them instead.
 
 ## Architecture (two compilation worlds, one message protocol)
 

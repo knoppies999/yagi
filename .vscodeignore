@@ -5,6 +5,8 @@ src/**
 webview/**
 esbuild.js
 tsconfig.json
+eslint.config.mjs
+vitest.config.ts
 .gitignore
 .gitattributes
 .eslintrc*
@@ -12,5 +14,7 @@ node_modules/**
 **/*.map
 **/*.ts
 **/*.tsx
+**/*.test.*
+src/test/**
 *.vsix
 .claude/**
