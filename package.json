@@ -123,6 +123,11 @@
         "icon": "$(arrow-up)"
       },
       {
+        "command": "yagi.forcePush",
+        "title": "YAGI: Force Push (--force-with-lease)",
+        "icon": "$(warning)"
+      },
+      {
         "command": "yagi.sidebarRefresh",
         "title": "YAGI: Refresh Sidebar",
         "icon": "$(refresh)"
@@ -173,6 +178,11 @@
           "command": "yagi.push",
           "when": "view == yagiSidebar",
           "group": "navigation@4"
+        },
+        {
+          "command": "yagi.forcePush",
+          "when": "view == yagiSidebar && yagi.needsForcePush",
+          "group": "navigation@4.5"
         },
         {
           "command": "yagi.sidebarRefresh",

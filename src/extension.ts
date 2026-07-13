@@ -10,7 +10,12 @@ import {
 import { initStatusBar, setBranch } from "./statusBar";
 import { GitService } from "./gitService";
 import { SidebarProvider } from "./sidebar";
-import { autoPullIfEnabled, maybeOfferForcePush } from "./gitOps";
+import {
+  autoPullIfEnabled,
+  checkNeedsForcePush,
+  clearNeedsForcePush,
+  markRebasedIfDiverged,
+} from "./gitOps";
 import { onActiveRepoChange } from "./activeRepo";
 
 export function activate(context: vscode.ExtensionContext) {
@@ -18,10 +23,22 @@ export function activate(context: vscode.ExtensionContext) {
 
   const sidebar = new SidebarProvider(context);
 
+  /** Keep the sidebar's "Force Push" title-bar button in sync with reality. */
+  const updateForcePushContext = async () => {
+    const repo = await sidebar.getRepo();
+    const info = repo ? await checkNeedsForcePush(repo.git, repo.root) : null;
+    await vscode.commands.executeCommand(
+      "setContext",
+      "yagi.needsForcePush",
+      !!info
+    );
+  };
+
   // Refresh both the sidebar and the panel (if open) after any change.
   const refreshAll = () => {
     sidebar.refresh();
     YagiPanel.current?.refresh();
+    void updateForcePushContext();
   };
 
   // Keep both views in lockstep when the active repository changes.
@@ -61,16 +78,17 @@ export function activate(context: vscode.ExtensionContext) {
   /** Run a history op from the sidebar: conflict-aware, then sync + refresh. */
   const runHistoryOp = async (
     git: GitService,
+    root: string,
     fn: () => Promise<string>,
     label: string,
-    afterSuccess: "autoPull" | "offerForcePush" | "none" = "autoPull"
+    afterSuccess: "autoPull" | "markForcePush" | "none" = "autoPull"
   ) => {
     try {
       await fn();
       if (afterSuccess === "autoPull") {
         await autoPullIfEnabled(git);
-      } else if (afterSuccess === "offerForcePush") {
-        await maybeOfferForcePush(git);
+      } else if (afterSuccess === "markForcePush") {
+        await markRebasedIfDiverged(git, root);
       }
     } catch (err: any) {
       const op = await git.getOperation();
@@ -146,15 +164,23 @@ export function activate(context: vscode.ExtensionContext) {
 
     vscode.commands.registerCommand("yagi.mergeBranch", async (arg) => {
       const name = branchName(arg);
-      const git = await sidebar.getService();
-      if (name && git) await runHistoryOp(git, () => git.merge(name), "Merge");
+      const repo = await sidebar.getRepo();
+      if (name && repo) {
+        await runHistoryOp(repo.git, repo.root, () => repo.git.merge(name), "Merge");
+      }
     }),
 
     vscode.commands.registerCommand("yagi.rebaseBranch", async (arg) => {
       const name = branchName(arg);
-      const git = await sidebar.getService();
-      if (name && git) {
-        await runHistoryOp(git, () => git.rebase(name), "Rebase", "offerForcePush");
+      const repo = await sidebar.getRepo();
+      if (name && repo) {
+        await runHistoryOp(
+          repo.git,
+          repo.root,
+          () => repo.git.rebase(name),
+          "Rebase",
+          "markForcePush"
+        );
       }
     }),
 
@@ -188,9 +214,11 @@ export function activate(context: vscode.ExtensionContext) {
       refreshAll();
     }),
     vscode.commands.registerCommand("yagi.pull", async () => {
-      const git = await sidebar.getService();
+      const repo = await sidebar.getRepo();
       // Explicit pull: don't auto-pull again afterwards.
-      if (git) await runHistoryOp(git, () => git.pull(), "Pull", "none");
+      if (repo) {
+        await runHistoryOp(repo.git, repo.root, () => repo.git.pull(), "Pull", "none");
+      }
     }),
     vscode.commands.registerCommand("yagi.push", async () => {
       const git = await sidebar.getService();
@@ -200,6 +228,23 @@ export function activate(context: vscode.ExtensionContext) {
         await autoPullIfEnabled(git);
       } catch (err: any) {
         vscode.window.showErrorMessage(`Push failed: ${err.message ?? err}`);
+      }
+      refreshAll();
+    }),
+
+    vscode.commands.registerCommand("yagi.forcePush", async () => {
+      const repo = await sidebar.getRepo();
+      if (!repo) return;
+      const info = await checkNeedsForcePush(repo.git, repo.root);
+      if (!info) {
+        refreshAll(); // stale button; state already resolved itself
+        return;
+      }
+      try {
+        await withProgress("Force pushing…", () => repo.git.forcePushWithLease());
+        clearNeedsForcePush(repo.root, info.branch);
+      } catch (err: any) {
+        vscode.window.showErrorMessage(`Force push failed: ${err.message ?? err}`);
       }
       refreshAll();
     }),

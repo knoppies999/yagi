@@ -3,7 +3,12 @@ import * as path from "path";
 import { GitService, OperationType } from "./gitService";
 import { openWorkingDiff, openCommitFileDiff, openMergeEditor } from "./diffProvider";
 import { setBranch } from "./statusBar";
-import { autoPullIfEnabled, maybeOfferForcePush } from "./gitOps";
+import {
+  autoPullIfEnabled,
+  checkNeedsForcePush,
+  clearNeedsForcePush,
+  markRebasedIfDiverged,
+} from "./gitOps";
 import { getActiveRoot, resolveActiveRepo } from "./activeRepo";
 
 // globalState key for the persisted, per-user pane layout.
@@ -187,6 +192,23 @@ export class YagiPanel {
             "Push"
           );
           break;
+        case "forcePush": {
+          const info = await checkNeedsForcePush(this.svc, this.root);
+          if (info) {
+            try {
+              await this.withProgress("Force pushing…", () =>
+                this.svc.forcePushWithLease()
+              );
+              clearNeedsForcePush(this.root, info.branch);
+            } catch (err: any) {
+              vscode.window.showErrorMessage(
+                `Force push failed: ${err.message ?? err}`
+              );
+            }
+          }
+          await this.sendState();
+          break;
+        }
 
         // --- interactive rebase -------------------------------------------
         case "requestRebase": {
@@ -204,7 +226,7 @@ export class YagiPanel {
           await this.tryOp(
             () => this.svc.interactiveRebase(msg.base, msg.todo),
             "Interactive rebase",
-            "offerForcePush"
+            "markForcePush"
           );
           break;
 
@@ -260,7 +282,7 @@ export class YagiPanel {
           await this.tryOp(
             () => this.svc.rebase(msg.branch),
             "Rebase",
-            "offerForcePush"
+            "markForcePush"
           );
           break;
 
@@ -269,7 +291,7 @@ export class YagiPanel {
           await this.tryOp(
             () => this.svc.continueOp(msg.op as OperationType),
             "Continue",
-            msg.op === "rebase" ? "offerForcePush" : "autoPull"
+            msg.op === "rebase" ? "markForcePush" : "autoPull"
           );
           break;
         case "abortOp":
@@ -280,7 +302,7 @@ export class YagiPanel {
           await this.tryOp(
             () => this.svc.skipOp(msg.op as OperationType),
             "Skip",
-            msg.op === "rebase" ? "offerForcePush" : "autoPull"
+            msg.op === "rebase" ? "markForcePush" : "autoPull"
           );
           break;
 
@@ -377,14 +399,14 @@ export class YagiPanel {
   private async tryOp(
     fn: () => Thenable<string>,
     label: string,
-    afterSuccess: "autoPull" | "offerForcePush" | "none" = "autoPull"
+    afterSuccess: "autoPull" | "markForcePush" | "none" = "autoPull"
   ) {
     try {
       await fn();
       if (afterSuccess === "autoPull") {
         await this.maybeAutoPull();
-      } else if (afterSuccess === "offerForcePush") {
-        await maybeOfferForcePush(this.svc);
+      } else if (afterSuccess === "markForcePush") {
+        await markRebasedIfDiverged(this.svc, this.root);
       }
     } catch (err: any) {
       const op = await this.svc.getOperation();
@@ -424,16 +446,25 @@ export class YagiPanel {
       this.post({ type: "notRepo", path: this.openedFolder });
       return;
     }
-    const [commits, status, branches, operation] = await Promise.all([
+    const [commits, status, branches, operation, forcePush] = await Promise.all([
       this.svc.getLog(this.commitLimit),
       this.svc.getStatus(),
       this.svc.getBranches(),
       this.svc.getOperation(),
+      checkNeedsForcePush(this.svc, this.root),
     ]);
     setBranch(branches.find((b) => b.current)?.name);
     // If we filled the limit, there are (probably) older commits to load.
     const hasMore = commits.length >= this.commitLimit;
-    this.post({ type: "state", commits, status, branches, operation, hasMore });
+    this.post({
+      type: "state",
+      commits,
+      status,
+      branches,
+      operation,
+      hasMore,
+      forcePush,
+    });
   }
 
   private post(message: any) {

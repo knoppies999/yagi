@@ -223,6 +223,16 @@ button.danger {
   text-transform: capitalize;
 }
 
+.force-push-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 14px;
+  background: var(--vscode-inputValidation-errorBackground, #5a1d1d);
+  border-bottom: 1px solid var(--vscode-inputValidation-errorBorder, #be1100);
+}
+
 /* ---- branches ---- */
 .branch-list {
   display: flex;

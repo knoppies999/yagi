@@ -37,7 +37,8 @@ export type OutMsg =
   | { type: "loadMore" }
   | { type: "resolveConflicts"; paths: string[]; resolution: "ours" | "theirs" }
   | { type: "undoMerge" }
-  | { type: "undoResolution"; path: string };
+  | { type: "undoResolution"; path: string }
+  | { type: "forcePush" };
 
 export interface RebaseEntry {
   hash: string;
@@ -63,6 +64,7 @@ export type InMsg =
       branches: Branch[];
       operation: Operation | null;
       hasMore: boolean;
+      forcePush: { branch: string; ahead: number; behind: number } | null;
     }
   | { type: "commitDetails"; details: CommitDetails }
   | { type: "rebaseTodo"; base: string; entries: RebaseEntry[] }

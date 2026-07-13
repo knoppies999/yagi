@@ -9,6 +9,7 @@ import type {
 import type { InMsg, RebaseEntry } from "./messages";
 import { post } from "./vscodeApi";
 import { OpBanner } from "./components/OpBanner";
+import { ForcePushBanner, ForcePushInfo } from "./components/ForcePushBanner";
 import { Toolbar } from "./components/Toolbar";
 import { Branches } from "./components/Branches";
 import { Graph } from "./components/Graph";
@@ -24,6 +25,7 @@ export function App() {
   const [branches, setBranches] = useState<Branch[]>([]);
   const [status, setStatus] = useState<FileChange[]>([]);
   const [operation, setOperation] = useState<Operation | null>(null);
+  const [forcePush, setForcePush] = useState<ForcePushInfo | null>(null);
   const [notRepo, setNotRepo] = useState<{ path?: string } | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -55,6 +57,7 @@ export function App() {
           setOperation(msg.operation);
           setHasMore(msg.hasMore);
           setLoadingMore(false);
+          setForcePush(msg.forcePush);
           break;
         case "commitDetails":
           // Ignore stale responses for a commit no longer selected.
@@ -133,6 +136,7 @@ export function App() {
   return (
     <div className="app-root">
       <OpBanner operation={operation} />
+      <ForcePushBanner info={forcePush} />
       <div
         className="app-grid"
         ref={gridRef}
