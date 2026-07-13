@@ -276,6 +276,14 @@ button.danger {
   font-size: 11px;
   opacity: 0.8;
 }
+.toggle-details {
+  font-size: 11px;
+  padding: 3px 8px;
+}
+.toggle-details.active {
+  background: var(--vscode-button-background);
+  color: var(--vscode-button-foreground);
+}
 .sync-status .ahead {
   color: var(--vscode-gitDecoration-untrackedResourceForeground, #98c379);
 }

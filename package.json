@@ -75,6 +75,11 @@
         "command": "yagi.sidebarRefresh",
         "title": "YAGI: Refresh Sidebar",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "yagi.switchRepo",
+        "title": "YAGI: Switch Repository",
+        "icon": "$(repo)"
       }
     ],
     "viewsContainers": {
@@ -107,6 +112,11 @@
           "command": "yagi.open",
           "when": "view == yagiSidebar",
           "group": "navigation@1"
+        },
+        {
+          "command": "yagi.switchRepo",
+          "when": "view == yagiSidebar",
+          "group": "navigation@6"
         },
         {
           "command": "yagi.fetch",

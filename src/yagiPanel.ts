@@ -3,8 +3,8 @@ import * as path from "path";
 import { GitService, OperationType } from "./gitService";
 import { openWorkingDiff, openCommitFileDiff } from "./diffProvider";
 import { setBranch } from "./statusBar";
-import { findGitRepos } from "./repoFinder";
 import { autoPullIfEnabled } from "./gitOps";
+import { getActiveRoot, resolveActiveRepo } from "./activeRepo";
 
 // globalState key for the persisted, per-user pane layout.
 const LAYOUT_KEY = "yagi.layout";
@@ -19,7 +19,6 @@ export class YagiPanel {
   private git: GitService | undefined;
   private root = "";
   private openedFolder = "";
-  private attempted = false; // have we tried to locate a repo yet?
   private commitLimit = 200; // grows as the user loads more history
   private debounce: NodeJS.Timeout | undefined;
   private disposables: vscode.Disposable[] = [];
@@ -84,34 +83,23 @@ export class YagiPanel {
   };
 
   /**
-   * Locate the repository. Handles three cases: the opened folder IS a repo (or
-   * lives inside one), or it merely CONTAINS repos in subfolders — in which
-   * case we adopt the only one, or ask the user to choose among several.
+   * Adopt the shared active repo (prompting once if the opened folder holds
+   * several). Rebuilds the git service when the active repo changes so the
+   * panel always matches the sidebar. Returns false if no repo is available.
    */
-  private async resolveRepo(): Promise<void> {
-    // git rev-parse also succeeds when the opened folder is inside a repo.
-    let root = await new GitService(this.openedFolder).getRepoRoot();
+  private async ensureRepo(): Promise<boolean> {
+    const root =
+      getActiveRoot() ?? (await resolveActiveRepo(this.openedFolder)) ?? undefined;
     if (!root) {
-      const repos = findGitRepos(this.openedFolder);
-      if (repos.length === 1) {
-        root = repos[0];
-      } else if (repos.length > 1) {
-        const pick = await vscode.window.showQuickPick(
-          repos.map((r) => ({
-            label: path.basename(r),
-            description: r,
-            root: r,
-          })),
-          { placeHolder: "Multiple Git repositories found — choose one for YAGI" }
-        );
-        root = pick?.root ?? null;
-      }
+      return false;
     }
-    if (root) {
+    if (root !== this.root) {
       this.root = root;
       this.git = new GitService(root);
+      this.commitLimit = 200; // reset paging for the new repo
       this.setupGitDirWatcher();
     }
+    return true;
   }
 
   /** Watch working-tree edits (covers subfolder repos too). */
@@ -154,7 +142,6 @@ export class YagiPanel {
           await this.sendState();
           break;
         case "refresh":
-          this.attempted = false; // let an explicit refresh re-scan for repos
           await this.sendState();
           break;
         case "loadMore":
@@ -381,12 +368,8 @@ export class YagiPanel {
 
   /** Gather the full repo snapshot and push it to the UI. */
   private async sendState() {
-    // Resolve the repository once (or again after an explicit refresh).
-    if (!this.git && !this.attempted) {
-      this.attempted = true;
-      await this.resolveRepo();
-    }
-    if (!this.git) {
+    // Adopt the shared active repository (may prompt on first use).
+    if (!(await this.ensureRepo())) {
       this.post({ type: "notRepo", path: this.openedFolder });
       return;
     }

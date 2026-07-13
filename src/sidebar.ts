@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import * as path from "path";
 import { GitService, Branch, FileChange } from "./gitService";
-import { findGitRepos } from "./repoFinder";
+import { getActiveRoot, resolveActiveRepo } from "./activeRepo";
 
 type Node =
   | { kind: "head"; branch: Branch }
@@ -58,12 +58,9 @@ export class SidebarProvider implements vscode.TreeDataProvider<Node> {
   private async load(): Promise<void> {
     const folder = vscode.workspace.workspaceFolders?.[0];
     if (!folder) return;
-    const opened = folder.uri.fsPath;
 
-    let root = await new GitService(opened).getRepoRoot();
-    if (!root) {
-      root = findGitRepos(opened)[0] ?? null;
-    }
+    // Share the exact repo the panel uses (prompting once if ambiguous).
+    const root = getActiveRoot() ?? (await resolveActiveRepo(folder.uri.fsPath));
     if (!root) return;
 
     const git = new GitService(root);

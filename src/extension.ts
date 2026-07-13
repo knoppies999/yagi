@@ -5,6 +5,7 @@ import { initStatusBar, setBranch } from "./statusBar";
 import { GitService } from "./gitService";
 import { SidebarProvider } from "./sidebar";
 import { autoPullIfEnabled } from "./gitOps";
+import { onActiveRepoChange, switchRepo } from "./activeRepo";
 
 export function activate(context: vscode.ExtensionContext) {
   initStatusBar(context);
@@ -16,6 +17,9 @@ export function activate(context: vscode.ExtensionContext) {
     sidebar.refresh();
     YagiPanel.current?.refresh();
   };
+
+  // Keep both views in lockstep when the active repository changes.
+  context.subscriptions.push(onActiveRepoChange(refreshAll));
 
   // Normalize a command argument that may be a branch name (from a click) or
   // a tree node (from a context menu).
@@ -72,6 +76,10 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("yagi.sidebarRefresh", () =>
       sidebar.refresh()
     ),
+    vscode.commands.registerCommand("yagi.switchRepo", async () => {
+      const folder = vscode.workspace.workspaceFolders?.[0];
+      if (folder) await switchRepo(folder.uri.fsPath);
+    }),
 
     vscode.commands.registerCommand("yagi.checkoutBranch", async (arg) => {
       const name = branchName(arg);

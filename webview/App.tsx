@@ -27,6 +27,7 @@ export function App() {
   const [notRepo, setNotRepo] = useState<{ path?: string } | null>(null);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(true);
 
   const [selected, setSelected] = useState<string | undefined>();
   const [details, setDetails] = useState<Details | undefined>();
@@ -85,8 +86,18 @@ export function App() {
   const selectCommit = useCallback((hash: string) => {
     setSelected(hash);
     setDetails(undefined);
+    setDetailsOpen(true); // selecting always reveals the details panel
     post({ type: "commitDetails", hash });
   }, []);
+
+  // Toolbar toggle: show/hide details; if nothing is selected yet, open HEAD.
+  const toggleDetails = useCallback(() => {
+    if (!selected) {
+      if (commits.length) selectCommit(commits[0].hash);
+      return;
+    }
+    setDetailsOpen((open) => !open);
+  }, [selected, commits, selectCommit]);
 
   const showMenu = useCallback((e: React.MouseEvent, items: MenuItem[]) => {
     e.preventDefault();
@@ -160,7 +171,11 @@ export function App() {
         )}
 
         <main className="graph-pane" ref={paneRef}>
-          <Toolbar branches={branches} />
+          <Toolbar
+            branches={branches}
+            detailsOpen={!!selected && detailsOpen}
+            onToggleDetails={toggleDetails}
+          />
           <Graph
             commits={commits}
             currentBranch={currentBranch}
@@ -171,7 +186,7 @@ export function App() {
             onLoadMore={loadMore}
             onMenu={showMenu}
           />
-          {selected && (
+          {selected && detailsOpen && (
             <>
               {!layout.collapsedDetails && (
                 <div
@@ -191,10 +206,7 @@ export function App() {
                   loading={!details}
                   collapsed={!!layout.collapsedDetails}
                   onToggleCollapse={() => toggleCollapse("collapsedDetails")}
-                  onClose={() => {
-                    setSelected(undefined);
-                    setDetails(undefined);
-                  }}
+                  onClose={() => setDetailsOpen(false)}
                 />
               </div>
             </>

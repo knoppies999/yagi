@@ -1,7 +1,15 @@
 import type { Branch } from "../../src/types";
 import { post } from "../vscodeApi";
 
-export function Toolbar({ branches }: { branches: Branch[] }) {
+export function Toolbar({
+  branches,
+  detailsOpen,
+  onToggleDetails,
+}: {
+  branches: Branch[];
+  detailsOpen: boolean;
+  onToggleDetails: () => void;
+}) {
   const cur = branches.find((b) => b.current);
 
   let sync = "";
@@ -32,6 +40,13 @@ export function Toolbar({ branches }: { branches: Branch[] }) {
           </>
         )}
       </span>
+      <button
+        className={"toggle-details" + (detailsOpen ? " active" : "")}
+        title={detailsOpen ? "Hide commit details" : "Show commit details"}
+        onClick={onToggleDetails}
+      >
+        ▤ Details
+      </button>
     </div>
   );
 }
