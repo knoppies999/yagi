@@ -7,9 +7,9 @@
 Commit graph. Staging. Merge conflicts. Interactive rebase. Remotes.
 No app-switching, no separate window — just your editor.
 
-[![Version](https://img.shields.io/visual-studio-marketplace/v/RuanduPlessis.yagi?label=Marketplace&color=0098FF)](https://marketplace.visualstudio.com/items?itemName=RuanduPlessis.yagi)
-[![Installs](https://img.shields.io/visual-studio-marketplace/i/RuanduPlessis.yagi?color=0098FF)](https://marketplace.visualstudio.com/items?itemName=RuanduPlessis.yagi)
-[![Rating](https://img.shields.io/visual-studio-marketplace/r/RuanduPlessis.yagi?color=0098FF)](https://marketplace.visualstudio.com/items?itemName=RuanduPlessis.yagi)
+[![Version](https://img.shields.io/visual-studio-marketplace/v/RuanduPlessis.yagi-git-interface?label=Marketplace&color=0098FF)](https://marketplace.visualstudio.com/items?itemName=RuanduPlessis.yagi-git-interface)
+[![Installs](https://img.shields.io/visual-studio-marketplace/i/RuanduPlessis.yagi-git-interface?color=0098FF)](https://marketplace.visualstudio.com/items?itemName=RuanduPlessis.yagi-git-interface)
+[![Rating](https://img.shields.io/visual-studio-marketplace/r/RuanduPlessis.yagi-git-interface?color=0098FF)](https://marketplace.visualstudio.com/items?itemName=RuanduPlessis.yagi-git-interface)
 [![License: MIT](https://img.shields.io/badge/license-MIT-brightgreen.svg)](LICENSE)
 
 </div>
