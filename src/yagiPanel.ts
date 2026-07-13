@@ -26,6 +26,7 @@ export class YagiPanel {
   private openedFolder = "";
   private commitLimit = 200; // grows as the user loads more history
   private debounce: NodeJS.Timeout | undefined;
+  private stateGeneration = 0; // bumped per sendState() call so stale in-flight responses are dropped
   private disposables: vscode.Disposable[] = [];
 
   static createOrShow(context: vscode.ExtensionContext) {
@@ -441,8 +442,14 @@ export class YagiPanel {
 
   /** Gather the full repo snapshot and push it to the UI. */
   private async sendState() {
+    // Claim this call's generation; if a newer sendState() starts before
+    // ours finishes (e.g. the active repo changes mid-fetch), our result is
+    // stale and must not overwrite the newer one in the webview.
+    const generation = ++this.stateGeneration;
+
     // Adopt the shared active repository (may prompt on first use).
     if (!(await this.ensureRepo())) {
+      if (generation !== this.stateGeneration) return;
       this.post({ type: "notRepo", path: this.openedFolder });
       return;
     }
@@ -453,6 +460,7 @@ export class YagiPanel {
       this.svc.getOperation(),
       checkNeedsForcePush(this.svc, this.root),
     ]);
+    if (generation !== this.stateGeneration) return; // superseded — drop it
     setBranch(branches.find((b) => b.current)?.name);
     // If we filled the limit, there are (probably) older commits to load.
     const hasMore = commits.length >= this.commitLimit;
