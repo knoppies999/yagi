@@ -1,7 +1,12 @@
 import * as vscode from "vscode";
 import * as path from "path";
 import { YagiPanel } from "./yagiPanel";
-import { GitContentProvider, YAGI_SCHEME, openWorkingDiff } from "./diffProvider";
+import {
+  GitContentProvider,
+  YAGI_SCHEME,
+  openWorkingDiff,
+  openMergeEditor,
+} from "./diffProvider";
 import { initStatusBar, setBranch } from "./statusBar";
 import { GitService } from "./gitService";
 import { SidebarProvider } from "./sidebar";
@@ -202,9 +207,7 @@ export function activate(context: vscode.ExtensionContext) {
       async (filePath: string) => {
         const repo = await sidebar.getRepo();
         if (repo) {
-          await vscode.window.showTextDocument(
-            vscode.Uri.file(path.join(repo.root, filePath))
-          );
+          await openMergeEditor(vscode.Uri.file(path.join(repo.root, filePath)));
         }
       }
     ),

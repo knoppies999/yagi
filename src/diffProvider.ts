@@ -75,3 +75,18 @@ export async function openCommitFileDiff(
   const title = `${filePath} @ ${short}`;
   await vscode.commands.executeCommand("vscode.diff", left, right, title);
 }
+
+/**
+ * Open a conflicted file. Prefers VS Code's built-in 3-way merge editor
+ * (the same UI the Source Control view uses) via the command the built-in
+ * Git extension contributes; falls back to a plain text editor showing the
+ * raw conflict markers if that extension is disabled or the command is
+ * ever renamed.
+ */
+export async function openMergeEditor(uri: vscode.Uri) {
+  try {
+    await vscode.commands.executeCommand("git.openMergeEditor", uri);
+  } catch {
+    await vscode.window.showTextDocument(uri);
+  }
+}

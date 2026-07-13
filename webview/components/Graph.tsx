@@ -67,12 +67,24 @@ export function Graph({
     }
   };
 
-  const menuFor = (c: Commit): MenuItem[] => [
+  const menuFor = (c: Commit): MenuItem[] => {
+    const isMerge = c.parents.length > 1;
+    const isBranchTip = c.refs.includes(currentBranch);
+    return [
     {
       label: "Cherry-pick onto current branch",
       onClick: () => post({ type: "cherryPick", hash: c.hash }),
     },
     { label: "Revert commit", onClick: () => post({ type: "revert", hash: c.hash }) },
+    ...(isMerge && isBranchTip
+      ? [
+          {
+            label: "Undo This Merge (reset to before it)",
+            danger: true,
+            onClick: () => post({ type: "undoMerge" }),
+          } satisfies MenuItem,
+        ]
+      : []),
     {
       label: "Rebase interactively from here…",
       onClick: () => post({ type: "requestRebase", base: c.hash }),
@@ -91,7 +103,8 @@ export function Graph({
       danger: true,
       onClick: () => post({ type: "reset", hash: c.hash, mode: "hard" }),
     },
-  ];
+    ];
+  };
 
   // Build SVG segments + rows only for the visible window.
   const edges: React.ReactNode[] = [];

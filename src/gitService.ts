@@ -243,13 +243,39 @@ export class GitService {
     return this.run(["cherry-pick", hash]);
   }
 
-  revert(hash: string) {
-    return this.run(["revert", "--no-edit", hash]);
+  /**
+   * Revert a commit. Merge commits require `-m <mainline>` or git refuses
+   * outright ("commit is a merge but no -m option was given") — detect that
+   * case and revert onto the first parent (the branch that was merged into),
+   * which is what "undo this merge" means in every normal workflow.
+   */
+  async revert(hash: string): Promise<string> {
+    const parents = (await this.run(["log", "-1", "--pretty=%P", hash]))
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
+    const args = ["revert", "--no-edit"];
+    if (parents.length > 1) {
+      args.push("-m", "1");
+    }
+    args.push(hash);
+    return this.run(args);
   }
 
   /** Merge a branch into the current branch (creates a merge commit if needed). */
   merge(branch: string) {
     return this.run(["merge", "--no-edit", branch]);
+  }
+
+  /**
+   * Undo the most recent merge (or any operation that moved HEAD) by
+   * resetting back to `ORIG_HEAD` — the pointer git itself sets to the
+   * pre-operation position. This is the standard, git-recommended way to
+   * undo a merge that hasn't been pushed yet; it's a hard reset, so it also
+   * discards any uncommitted changes and any commits made since.
+   */
+  undoMerge() {
+    return this.run(["reset", "--hard", "ORIG_HEAD"]);
   }
 
   /** Rebase the current branch onto `onto`. */

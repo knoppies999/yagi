@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import * as path from "path";
 import { GitService, OperationType } from "./gitService";
-import { openWorkingDiff, openCommitFileDiff } from "./diffProvider";
+import { openWorkingDiff, openCommitFileDiff, openMergeEditor } from "./diffProvider";
 import { setBranch } from "./statusBar";
 import { autoPullIfEnabled } from "./gitOps";
 import { getActiveRoot, resolveActiveRepo } from "./activeRepo";
@@ -212,10 +212,7 @@ export class YagiPanel {
           await openWorkingDiff(this.root, msg.path, msg.staged);
           break;
         case "openConflict":
-          // The real file has conflict markers; VS Code shows its merge editor.
-          await vscode.window.showTextDocument(
-            vscode.Uri.file(path.join(this.root, msg.path))
-          );
+          await openMergeEditor(vscode.Uri.file(path.join(this.root, msg.path)));
           break;
         case "resolveConflicts":
           try {
@@ -326,6 +323,25 @@ export class YagiPanel {
               : "ok";
           if (confirm) {
             await this.svc.resetTo(msg.hash, mode);
+            await this.sendState();
+          }
+          break;
+        }
+        case "undoMerge": {
+          const confirm = await vscode.window.showWarningMessage(
+            "Undo the last merge? This hard-resets to before it (git reset " +
+              "--hard ORIG_HEAD), discarding uncommitted changes.",
+            { modal: true },
+            "Undo Merge"
+          );
+          if (confirm) {
+            try {
+              await this.svc.undoMerge();
+            } catch (err: any) {
+              vscode.window.showErrorMessage(
+                `Nothing to undo: ${err.message ?? err}`
+              );
+            }
             await this.sendState();
           }
           break;
