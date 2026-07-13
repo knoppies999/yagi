@@ -11,6 +11,13 @@ import {
   Operation,
   OperationType,
 } from "./types";
+import {
+  ConflictStage,
+  clearConflictCache,
+  getCachedStages,
+  hasCachedStages,
+  rememberConflict,
+} from "./conflictCache";
 
 export {
   Branch,
@@ -29,8 +36,16 @@ const RS = "\x1e";
 export class GitService {
   constructor(private readonly cwd: string) {}
 
-  /** Run a git command, resolving with stdout. Rejects on non-zero exit. */
-  private run(args: string[], extraEnv?: NodeJS.ProcessEnv): Promise<string> {
+  /**
+   * Run a git command, resolving with stdout. Rejects on non-zero exit.
+   * `stdin`, when given, is written to the child process and closed —
+   * needed for plumbing commands like `update-index --index-info`.
+   */
+  private run(
+    args: string[],
+    extraEnv?: NodeJS.ProcessEnv,
+    stdin?: string
+  ): Promise<string> {
     return new Promise((resolve, reject) => {
       const child = spawn("git", args, {
         cwd: this.cwd,
@@ -56,6 +71,9 @@ export class GitService {
           reject(new Error(`git ${args.join(" ")} failed (${code}): ${stderr}`));
         }
       });
+      if (stdin !== undefined) {
+        child.stdin.end(stdin);
+      }
     });
   }
 
@@ -108,7 +126,7 @@ export class GitService {
   async getStatus(): Promise<FileChange[]> {
     const out = await this.run(["status", "--porcelain=v1", "-z"]);
     const parts = out.split("\0").filter(Boolean);
-    const changes: FileChange[] = [];
+    const changes: Omit<FileChange, "resolvable">[] = [];
     for (let i = 0; i < parts.length; i++) {
       const entry = parts[i];
       const index = entry[0];
@@ -133,7 +151,59 @@ export class GitService {
         conflicted,
       });
     }
-    return changes;
+
+    // "Undo Resolution" only makes sense while an operation is actually in
+    // progress. If there isn't one, drop anything remembered — it can only
+    // be stale (a finished/aborted operation, possibly via a bypass like a
+    // terminal command), and stale stages must never leak into a new one.
+    const op = await this.getOperation();
+    if (!op) {
+      clearConflictCache(this.cwd);
+    } else if (changes.some((c) => c.conflicted)) {
+      for (const [p, stages] of await this.getUnmergedStages()) {
+        rememberConflict(this.cwd, p, stages);
+      }
+    }
+
+    return changes.map((c) => ({
+      ...c,
+      resolvable: !!op && !c.conflicted && hasCachedStages(this.cwd, c.path),
+    }));
+  }
+
+  /** All currently-unmerged paths' index stages, keyed by path. */
+  private async getUnmergedStages(): Promise<Map<string, ConflictStage[]>> {
+    const out = await this.run(["ls-files", "-u", "-z"]);
+    const map = new Map<string, ConflictStage[]>();
+    for (const line of out.split("\0").filter(Boolean)) {
+      // "<mode> <sha> <stage>\t<path>"
+      const tab = line.indexOf("\t");
+      const [mode, sha, stageStr] = line.slice(0, tab).split(" ");
+      const filePath = line.slice(tab + 1);
+      const stage = Number(stageStr) as 1 | 2 | 3;
+      const arr = map.get(filePath) ?? [];
+      arr.push({ mode, sha, stage });
+      map.set(filePath, arr);
+    }
+    return map;
+  }
+
+  /**
+   * Restore an already-resolved path back to its unmerged conflict state,
+   * using the stages remembered by `getStatus()` before it was resolved.
+   * Lets the user redo a resolution instead of living with it or aborting
+   * the whole operation.
+   */
+  async undoResolution(path: string): Promise<void> {
+    const stages = getCachedStages(this.cwd, path);
+    if (!stages || !stages.length) {
+      throw new Error("No prior conflict remembered for this file.");
+    }
+    const info =
+      stages.map((s) => `${s.mode} ${s.sha} ${s.stage}\t${path}`).join("\n") +
+      "\n";
+    await this.run(["update-index", "--index-info"], undefined, info);
+    await this.run(["checkout", "-m", "--", path]);
   }
 
   async getBranches(): Promise<Branch[]> {
@@ -341,17 +411,23 @@ export class GitService {
   }
 
   /** Continue the current operation after conflicts are resolved & staged. */
-  continueOp(op: OperationType) {
-    return this.run([op, "--continue"]);
+  async continueOp(op: OperationType): Promise<string> {
+    const out = await this.run([op, "--continue"]);
+    clearConflictCache(this.cwd);
+    return out;
   }
 
-  abortOp(op: OperationType) {
-    return this.run([op, "--abort"]);
+  async abortOp(op: OperationType): Promise<string> {
+    const out = await this.run([op, "--abort"]);
+    clearConflictCache(this.cwd);
+    return out;
   }
 
   /** Skip the current commit (rebase / cherry-pick only). */
-  skipOp(op: OperationType) {
-    return this.run([op, "--skip"]);
+  async skipOp(op: OperationType): Promise<string> {
+    const out = await this.run([op, "--skip"]);
+    clearConflictCache(this.cwd);
+    return out;
   }
 
   /**

@@ -151,7 +151,7 @@ export class SidebarProvider implements vscode.TreeDataProvider<Node> {
           path.join(this.data?.root ?? "", f.path)
         );
         item.iconPath = new vscode.ThemeIcon(
-          f.conflicted ? "warning" : "diff-modified"
+          f.conflicted ? "warning" : f.resolvable ? "discard" : "diff-modified"
         );
         item.command = f.conflicted
           ? {
@@ -164,9 +164,16 @@ export class SidebarProvider implements vscode.TreeDataProvider<Node> {
               title: "Open Diff",
               arguments: [f.path, f.staged],
             };
-        // Conflicts get their own contextValue so the right-click menu can
-        // offer Accept Incoming/Outgoing only where it makes sense.
-        item.contextValue = f.conflicted ? "conflictFile" : "file";
+        if (f.resolvable) {
+          item.tooltip = "Resolved during this operation — right-click to redo";
+        }
+        // Conflicts and already-resolved-but-redoable files each get their
+        // own contextValue so the right-click menu can scope actions.
+        item.contextValue = f.conflicted
+          ? "conflictFile"
+          : f.resolvable
+          ? "resolvableFile"
+          : "file";
         return item;
       }
       case "branch": {

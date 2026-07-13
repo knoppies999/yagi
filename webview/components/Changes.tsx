@@ -38,6 +38,14 @@ function FileRow({
       >
         {change.path}
       </span>
+      {kind === "staged" && change.resolvable && (
+        <span
+          className="resolvable-badge"
+          title="Resolved during this operation — right-click to redo"
+        >
+          ↺
+        </span>
+      )}
       {kind === "staged" && (
         <button title="Unstage" onClick={() => post({ type: "unstage", path: change.path })}>
           −
@@ -187,7 +195,24 @@ export function Changes({
         <h3>Staged ({staged.length})</h3>
         <ul>
           {staged.map((c) => (
-            <FileRow key={c.path} change={c} kind="staged" />
+            <FileRow
+              key={c.path}
+              change={c}
+              kind="staged"
+              onContextMenu={
+                c.resolvable
+                  ? (e) =>
+                      onMenu(e, [
+                        {
+                          label: "Undo Resolution (redo merge)…",
+                          danger: true,
+                          onClick: () =>
+                            post({ type: "undoResolution", path: c.path }),
+                        },
+                      ])
+                  : undefined
+              }
+            />
           ))}
         </ul>
       </div>

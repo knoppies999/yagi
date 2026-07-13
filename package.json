@@ -103,6 +103,11 @@
         "icon": "$(pass)"
       },
       {
+        "command": "yagi.undoResolution",
+        "title": "Undo Resolution (redo merge)",
+        "icon": "$(discard)"
+      },
+      {
         "command": "yagi.fetch",
         "title": "YAGI: Fetch",
         "icon": "$(cloud-download)"
@@ -240,6 +245,16 @@
           "command": "yagi.markResolved",
           "when": "view == yagiSidebar && viewItem == conflictFile",
           "group": "1_actions@3"
+        },
+        {
+          "command": "yagi.undoResolution",
+          "when": "view == yagiSidebar && viewItem == resolvableFile",
+          "group": "inline"
+        },
+        {
+          "command": "yagi.undoResolution",
+          "when": "view == yagiSidebar && viewItem == resolvableFile",
+          "group": "1_actions@1"
         }
       ],
       "editor/title": [

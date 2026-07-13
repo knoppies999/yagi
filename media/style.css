@@ -504,6 +504,15 @@ button.danger {
   padding: 0;
   flex-shrink: 0;
 }
+.resolvable-badge {
+  flex-shrink: 0;
+  opacity: 0.55;
+  cursor: default;
+  font-size: 12px;
+}
+.resolvable-badge:hover {
+  opacity: 0.9;
+}
 .commit-msg {
   width: 100%;
   margin-top: 10px;

@@ -36,7 +36,8 @@ export type OutMsg =
   | { type: "saveLayout"; layout: Layout }
   | { type: "loadMore" }
   | { type: "resolveConflicts"; paths: string[]; resolution: "ours" | "theirs" }
-  | { type: "undoMerge" };
+  | { type: "undoMerge" }
+  | { type: "undoResolution"; path: string };
 
 export interface RebaseEntry {
   hash: string;

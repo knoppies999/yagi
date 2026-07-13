@@ -18,6 +18,9 @@ export interface FileChange {
   worktree: string;
   staged: boolean;
   conflicted: boolean;
+  /** Already resolved during the current operation, but its pre-resolution
+   *  conflict state was remembered — "Undo Resolution" can restore it. */
+  resolvable: boolean;
 }
 
 export type OperationType = "merge" | "rebase" | "cherry-pick" | "revert";

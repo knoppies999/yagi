@@ -224,6 +224,16 @@ export class YagiPanel {
           }
           await this.sendState();
           break;
+        case "undoResolution":
+          try {
+            await this.svc.undoResolution(msg.path);
+          } catch (err: any) {
+            vscode.window.showErrorMessage(
+              `Undo resolution failed: ${err.message ?? err}`
+            );
+          }
+          await this.sendState();
+          break;
 
         // --- commit details -----------------------------------------------
         case "commitDetails": {

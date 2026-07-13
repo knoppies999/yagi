@@ -246,6 +246,22 @@ export function activate(context: vscode.ExtensionContext) {
         }
       }
       refreshAll();
+    }),
+
+    vscode.commands.registerCommand("yagi.undoResolution", async (first, all) => {
+      const git = await sidebar.getService();
+      const paths = filePaths(first, all);
+      if (!git || !paths.length) return;
+      for (const p of paths) {
+        try {
+          await git.undoResolution(p);
+        } catch (err: any) {
+          vscode.window.showErrorMessage(
+            `Undo resolution failed: ${err.message ?? err}`
+          );
+        }
+      }
+      refreshAll();
     })
   );
 
