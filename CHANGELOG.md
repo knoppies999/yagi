@@ -2,6 +2,11 @@
 
 All notable changes to YAGI are documented here.
 
+## 0.1.2
+
+**Docs**
+- Added a screenshot of the commit graph to the Marketplace README.
+
 ## 0.1.1
 
 **Fixes**
