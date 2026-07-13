@@ -5,7 +5,7 @@ import { initStatusBar, setBranch } from "./statusBar";
 import { GitService } from "./gitService";
 import { SidebarProvider } from "./sidebar";
 import { autoPullIfEnabled } from "./gitOps";
-import { onActiveRepoChange, switchRepo } from "./activeRepo";
+import { onActiveRepoChange } from "./activeRepo";
 
 export function activate(context: vscode.ExtensionContext) {
   initStatusBar(context);
@@ -76,9 +76,8 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("yagi.sidebarRefresh", () =>
       sidebar.refresh()
     ),
-    vscode.commands.registerCommand("yagi.switchRepo", async () => {
-      const folder = vscode.workspace.workspaceFolders?.[0];
-      if (folder) await switchRepo(folder.uri.fsPath);
+    vscode.commands.registerCommand("yagi.selectRepo", (root: string) => {
+      sidebar.selectRepo(root);
     }),
 
     vscode.commands.registerCommand("yagi.checkoutBranch", async (arg) => {

@@ -1,9 +1,16 @@
 import * as vscode from "vscode";
 import * as path from "path";
 import { GitService, Branch, FileChange } from "./gitService";
-import { getActiveRoot, resolveActiveRepo } from "./activeRepo";
+import {
+  getActiveRoot,
+  resolveActiveRepo,
+  listCandidateRepos,
+  setActiveRoot,
+} from "./activeRepo";
 
 type Node =
+  | { kind: "repoHeader" }
+  | { kind: "repoOption"; root: string }
   | { kind: "head"; branch: Branch }
   | { kind: "group"; id: "changes" | "branches"; label: string }
   | { kind: "file"; file: FileChange }
@@ -15,6 +22,7 @@ interface RepoData {
   git: GitService;
   branches: Branch[];
   status: FileChange[];
+  allRepos: string[];
 }
 
 /**
@@ -59,20 +67,61 @@ export class SidebarProvider implements vscode.TreeDataProvider<Node> {
     const folder = vscode.workspace.workspaceFolders?.[0];
     if (!folder) return;
 
-    // Share the exact repo the panel uses (prompting once if ambiguous).
+    // Share the exact repo the panel uses (auto-picks the first if several;
+    // switching afterward happens inline via the "Repository" row below).
     const root = getActiveRoot() ?? (await resolveActiveRepo(folder.uri.fsPath));
     if (!root) return;
 
-    const git = new GitService(root);
+    const [git, allRepos] = [
+      new GitService(root),
+      await listCandidateRepos(folder.uri.fsPath),
+    ];
     const [branches, status] = await Promise.all([
       git.getBranches(),
       git.getStatus(),
     ]);
-    this.data = { root, git, branches, status };
+    this.data = { root, git, branches, status, allRepos };
+  }
+
+  /** Switch the active repository directly — no prompt, just a tree click. */
+  selectRepo(root: string) {
+    setActiveRoot(root);
   }
 
   getTreeItem(node: Node): vscode.TreeItem {
     switch (node.kind) {
+      case "repoHeader": {
+        const root = this.data?.root ?? "";
+        const many = (this.data?.allRepos.length ?? 0) > 1;
+        const item = new vscode.TreeItem(
+          `Repository: ${path.basename(root)}`,
+          many
+            ? vscode.TreeItemCollapsibleState.Collapsed
+            : vscode.TreeItemCollapsibleState.None
+        );
+        item.iconPath = new vscode.ThemeIcon("repo");
+        item.tooltip = many
+          ? `${root}\n\nExpand to switch between the ${this.data?.allRepos.length} repositories found in this folder.`
+          : root;
+        item.contextValue = "repoHeader";
+        return item;
+      }
+      case "repoOption": {
+        const active = node.root === this.data?.root;
+        const item = new vscode.TreeItem(path.basename(node.root));
+        item.description = node.root;
+        item.iconPath = new vscode.ThemeIcon(active ? "check" : "circle-outline");
+        item.tooltip = active ? "Current repository" : `Switch to ${node.root}`;
+        if (!active) {
+          item.command = {
+            command: "yagi.selectRepo",
+            title: "Switch Repository",
+            arguments: [node.root],
+          };
+        }
+        item.contextValue = active ? "activeRepoOption" : "repoOption";
+        return item;
+      }
       case "head": {
         const b = node.branch;
         const item = new vscode.TreeItem(b.name);
@@ -149,7 +198,7 @@ export class SidebarProvider implements vscode.TreeDataProvider<Node> {
     if (!element) {
       const current = this.data.branches.find((b) => b.current);
       const changed = this.data.status.length;
-      const roots: Node[] = [];
+      const roots: Node[] = [{ kind: "repoHeader" }];
       if (current) {
         roots.push({ kind: "head", branch: current });
       }
@@ -166,6 +215,9 @@ export class SidebarProvider implements vscode.TreeDataProvider<Node> {
       return roots;
     }
 
+    if (element.kind === "repoHeader") {
+      return this.data.allRepos.map((root) => ({ kind: "repoOption", root }));
+    }
     if (element.kind === "group" && element.id === "changes") {
       if (this.data.status.length === 0) {
         return [{ kind: "info", label: "No changes" }];

@@ -1,5 +1,4 @@
 import * as vscode from "vscode";
-import * as path from "path";
 import { GitService } from "./gitService";
 import { findGitRepos } from "./repoFinder";
 
@@ -27,7 +26,7 @@ export function setActiveRoot(root: string | undefined) {
 }
 
 /** All candidate repo roots for the opened folder (self, or subfolder repos). */
-async function candidates(openedFolder: string): Promise<string[]> {
+export async function listCandidateRepos(openedFolder: string): Promise<string[]> {
   const set = new Set<string>();
   const top = await new GitService(openedFolder).getRepoRoot();
   if (top) set.add(top);
@@ -35,26 +34,11 @@ async function candidates(openedFolder: string): Promise<string[]> {
   return [...set];
 }
 
-async function pick(
-  repos: string[],
-  placeHolder: string
-): Promise<string | undefined> {
-  const choice = await vscode.window.showQuickPick(
-    repos.map((r) => ({
-      label: path.basename(r),
-      description: r,
-      root: r,
-      picked: r === activeRoot,
-    })),
-    { placeHolder }
-  );
-  return choice?.root;
-}
-
 /**
- * Resolve the active repo once. Prompts if the opened folder holds several.
- * Cached afterward; a cancelled prompt won't nag again until an explicit
- * switch. Both views await the same in-flight promise, so only one prompt.
+ * Resolve the active repo once, with no prompt: if the opened folder holds
+ * several, the first one found is adopted automatically. Switching between
+ * them afterward happens inline in the sidebar's "Repository" row — YAGI
+ * never blocks on a modal picker.
  */
 export async function resolveActiveRepo(
   openedFolder: string
@@ -63,12 +47,8 @@ export async function resolveActiveRepo(
   if (attempted) return undefined;
   if (!resolving) {
     resolving = (async () => {
-      const repos = await candidates(openedFolder);
-      if (repos.length === 0) return undefined;
-      const root =
-        repos.length === 1
-          ? repos[0]
-          : await pick(repos, "Multiple Git repositories found — choose one for YAGI");
+      const repos = await listCandidateRepos(openedFolder);
+      const root = repos[0];
       if (root) setActiveRoot(root);
       return root;
     })().finally(() => {
@@ -77,18 +57,4 @@ export async function resolveActiveRepo(
     });
   }
   return resolving;
-}
-
-/** Let the user explicitly switch which repository YAGI shows. */
-export async function switchRepo(openedFolder: string): Promise<void> {
-  const repos = await candidates(openedFolder);
-  if (repos.length === 0) {
-    vscode.window.showInformationMessage("YAGI: no Git repository found here.");
-    return;
-  }
-  const root = await pick(repos, "Select the Git repository for YAGI");
-  if (root) {
-    attempted = true;
-    setActiveRoot(root);
-  }
 }
