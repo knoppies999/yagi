@@ -92,6 +92,27 @@ export function activate(context: vscode.ExtensionContext) {
       refreshAll();
     }),
 
+    vscode.commands.registerCommand("yagi.createBranchFrom", async (arg) => {
+      const name = branchName(arg);
+      const git = await sidebar.getService();
+      if (!name || !git) return;
+      const newName = await vscode.window.showInputBox({
+        prompt: `New branch from ${name}`,
+        validateInput: (v) =>
+          /\s/.test(v) ? "Branch names can't contain spaces" : null,
+      });
+      if (newName) {
+        try {
+          await git.createBranch(newName, name);
+        } catch (err: any) {
+          vscode.window.showErrorMessage(
+            `Create branch failed: ${err.message ?? err}`
+          );
+        }
+        refreshAll();
+      }
+    }),
+
     vscode.commands.registerCommand("yagi.mergeBranch", async (arg) => {
       const name = branchName(arg);
       const git = await sidebar.getService();

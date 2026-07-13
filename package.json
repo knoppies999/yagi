@@ -68,6 +68,11 @@
         "icon": "$(check)"
       },
       {
+        "command": "yagi.createBranchFrom",
+        "title": "Create Branch...",
+        "icon": "$(add)"
+      },
+      {
         "command": "yagi.mergeBranch",
         "title": "Merge into current branch",
         "icon": "$(git-merge)"
@@ -167,19 +172,34 @@
           "group": "1_actions@1"
         },
         {
-          "command": "yagi.mergeBranch",
+          "command": "yagi.createBranchFrom",
           "when": "view == yagiSidebar && viewItem == branch",
           "group": "1_actions@2"
         },
         {
-          "command": "yagi.rebaseBranch",
+          "command": "yagi.mergeBranch",
           "when": "view == yagiSidebar && viewItem == branch",
           "group": "1_actions@3"
+        },
+        {
+          "command": "yagi.rebaseBranch",
+          "when": "view == yagiSidebar && viewItem == branch",
+          "group": "1_actions@4"
         },
         {
           "command": "yagi.deleteBranch",
           "when": "view == yagiSidebar && viewItem == branch",
           "group": "2_danger@1"
+        },
+        {
+          "command": "yagi.createBranchFrom",
+          "when": "view == yagiSidebar && viewItem == currentBranch",
+          "group": "1_actions@1"
+        },
+        {
+          "command": "yagi.createBranchFrom",
+          "when": "view == yagiSidebar && viewItem == head",
+          "group": "1_actions@1"
         }
       ],
       "editor/title": [

@@ -80,7 +80,7 @@ export function Graph({
     { separator: true },
     {
       label: "Create branch here…",
-      onClick: () => post({ type: "createBranch", hash: c.hash }),
+      onClick: () => post({ type: "createBranch", startPoint: c.hash }),
     },
     {
       label: `Reset ${currentBranch || "HEAD"} here (mixed)`,

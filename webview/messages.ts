@@ -25,7 +25,7 @@ export type OutMsg =
   | { type: "continueOp"; op: Operation["type"] }
   | { type: "abortOp"; op: Operation["type"] }
   | { type: "skipOp"; op: Operation["type"] }
-  | { type: "createBranch"; hash: string }
+  | { type: "createBranch"; startPoint: string }
   | { type: "deleteBranch"; branch: string }
   | { type: "reset"; hash: string; mode: "soft" | "mixed" | "hard" }
   | { type: "fetch" }

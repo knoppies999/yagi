@@ -20,12 +20,18 @@ export function Branches({
     : branches;
 
   const menuFor = (b: Branch): MenuItem[] => {
-    if (b.current) return [{ label: "(current branch)" }];
+    const createBranch: MenuItem = {
+      label: `Create Branch from ${b.name}…`,
+      onClick: () => post({ type: "createBranch", startPoint: b.name }),
+    };
+    if (b.current) return [createBranch];
     return [
       {
         label: `Checkout ${b.name}`,
         onClick: () => post({ type: "checkout", branch: b.name }),
       },
+      createBranch,
+      { separator: true },
       {
         label: `Merge ${b.name} into ${current}`,
         onClick: () => post({ type: "merge", branch: b.name }),

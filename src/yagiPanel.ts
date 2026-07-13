@@ -273,12 +273,18 @@ export class YagiPanel {
         // --- branch & reset (native prompts / confirmations) --------------
         case "createBranch": {
           const name = await vscode.window.showInputBox({
-            prompt: `New branch at ${msg.hash?.slice(0, 7) ?? "HEAD"}`,
+            prompt: `New branch from ${shortRef(msg.startPoint)}`,
             validateInput: (v) =>
               /\s/.test(v) ? "Branch names can't contain spaces" : null,
           });
           if (name) {
-            await this.svc.createBranch(name, msg.hash);
+            try {
+              await this.svc.createBranch(name, msg.startPoint);
+            } catch (err: any) {
+              vscode.window.showErrorMessage(
+                `Create branch failed: ${err.message ?? err}`
+              );
+            }
             await this.sendState();
           }
           break;
@@ -445,6 +451,12 @@ export class YagiPanel {
   refresh() {
     this.sendState();
   }
+}
+
+/** A full commit hash renders as its short form; anything else (a branch
+ *  name, "HEAD", etc.) is already human-readable and passes through as-is. */
+function shortRef(ref: string): string {
+  return /^[0-9a-f]{40}$/i.test(ref) ? ref.slice(0, 7) : ref;
 }
 
 function getNonce(): string {
