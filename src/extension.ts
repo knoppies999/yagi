@@ -10,7 +10,7 @@ import {
 import { initStatusBar, setBranch } from "./statusBar";
 import { GitService } from "./gitService";
 import { SidebarProvider } from "./sidebar";
-import { autoPullIfEnabled } from "./gitOps";
+import { autoPullIfEnabled, maybeOfferForcePush } from "./gitOps";
 import { onActiveRepoChange } from "./activeRepo";
 
 export function activate(context: vscode.ExtensionContext) {
@@ -44,8 +44,9 @@ export function activate(context: vscode.ExtensionContext) {
     const nodes = Array.isArray(all) && all.length ? all : [first];
     const paths: string[] = [];
     for (const n of nodes) {
-      if (n && typeof n === "object" && "file" in (n as any)) {
-        paths.push((n as any).file.path as string);
+      if (n && typeof n === "object" && "file" in n) {
+        const file = (n as { file: { path: string } }).file;
+        paths.push(file.path);
       }
     }
     return paths;
@@ -57,15 +58,20 @@ export function activate(context: vscode.ExtensionContext) {
       fn
     );
 
-  /** Run a history op from the sidebar: conflict-aware, then auto-pull + refresh. */
+  /** Run a history op from the sidebar: conflict-aware, then sync + refresh. */
   const runHistoryOp = async (
     git: GitService,
     fn: () => Promise<string>,
-    label: string
+    label: string,
+    afterSuccess: "autoPull" | "offerForcePush" | "none" = "autoPull"
   ) => {
     try {
       await fn();
-      await autoPullIfEnabled(git);
+      if (afterSuccess === "autoPull") {
+        await autoPullIfEnabled(git);
+      } else if (afterSuccess === "offerForcePush") {
+        await maybeOfferForcePush(git);
+      }
     } catch (err: any) {
       const op = await git.getOperation();
       if (op && op.conflicted.length) {
@@ -147,7 +153,9 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("yagi.rebaseBranch", async (arg) => {
       const name = branchName(arg);
       const git = await sidebar.getService();
-      if (name && git) await runHistoryOp(git, () => git.rebase(name), "Rebase");
+      if (name && git) {
+        await runHistoryOp(git, () => git.rebase(name), "Rebase", "offerForcePush");
+      }
     }),
 
     vscode.commands.registerCommand("yagi.deleteBranch", async (arg) => {
@@ -181,7 +189,8 @@ export function activate(context: vscode.ExtensionContext) {
     }),
     vscode.commands.registerCommand("yagi.pull", async () => {
       const git = await sidebar.getService();
-      if (git) await runHistoryOp(git, () => git.pull(), "Pull");
+      // Explicit pull: don't auto-pull again afterwards.
+      if (git) await runHistoryOp(git, () => git.pull(), "Pull", "none");
     }),
     vscode.commands.registerCommand("yagi.push", async () => {
       const git = await sidebar.getService();

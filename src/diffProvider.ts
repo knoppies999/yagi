@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import * as path from "path";
 import { GitService } from "./gitService";
 
 export const YAGI_SCHEME = "yagi";
@@ -55,7 +56,7 @@ export async function openWorkingDiff(
     await vscode.commands.executeCommand("vscode.diff", left, right, title);
   } else {
     const left = refUri(root, filePath, "", "index");
-    const right = vscode.Uri.file(require("path").join(root, filePath));
+    const right = vscode.Uri.file(path.join(root, filePath));
     await vscode.commands.executeCommand("vscode.diff", left, right, title);
   }
 }

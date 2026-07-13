@@ -3,7 +3,7 @@ import * as path from "path";
 import { GitService, OperationType } from "./gitService";
 import { openWorkingDiff, openCommitFileDiff, openMergeEditor } from "./diffProvider";
 import { setBranch } from "./statusBar";
-import { autoPullIfEnabled } from "./gitOps";
+import { autoPullIfEnabled, maybeOfferForcePush } from "./gitOps";
 import { getActiveRoot, resolveActiveRepo } from "./activeRepo";
 
 // globalState key for the persisted, per-user pane layout.
@@ -79,7 +79,7 @@ export class YagiPanel {
     if (this.debounce) {
       clearTimeout(this.debounce);
     }
-    this.debounce = setTimeout(() => this.sendState(), 300);
+    this.debounce = setTimeout(() => void this.sendState(), 300);
   };
 
   /**
@@ -97,7 +97,7 @@ export class YagiPanel {
       this.root = root;
       this.git = new GitService(root);
       this.commitLimit = 200; // reset paging for the new repo
-      this.setupGitDirWatcher();
+      void this.setupGitDirWatcher();
     }
     return true;
   }
@@ -178,7 +178,7 @@ export class YagiPanel {
           await this.tryOp(
             () => this.withProgress("Pulling…", () => this.svc.pull()),
             "Pull",
-            false
+            "none"
           );
           break;
         case "push":
@@ -203,7 +203,8 @@ export class YagiPanel {
         case "applyRebase":
           await this.tryOp(
             () => this.svc.interactiveRebase(msg.base, msg.todo),
-            "Interactive rebase"
+            "Interactive rebase",
+            "offerForcePush"
           );
           break;
 
@@ -256,14 +257,19 @@ export class YagiPanel {
           await this.tryOp(() => this.svc.merge(msg.branch), "Merge");
           break;
         case "rebase":
-          await this.tryOp(() => this.svc.rebase(msg.branch), "Rebase");
+          await this.tryOp(
+            () => this.svc.rebase(msg.branch),
+            "Rebase",
+            "offerForcePush"
+          );
           break;
 
         // --- operation control --------------------------------------------
         case "continueOp":
           await this.tryOp(
             () => this.svc.continueOp(msg.op as OperationType),
-            "Continue"
+            "Continue",
+            msg.op === "rebase" ? "offerForcePush" : "autoPull"
           );
           break;
         case "abortOp":
@@ -273,7 +279,8 @@ export class YagiPanel {
         case "skipOp":
           await this.tryOp(
             () => this.svc.skipOp(msg.op as OperationType),
-            "Skip"
+            "Skip",
+            msg.op === "rebase" ? "offerForcePush" : "autoPull"
           );
           break;
 
@@ -370,12 +377,14 @@ export class YagiPanel {
   private async tryOp(
     fn: () => Thenable<string>,
     label: string,
-    autoPull = true
+    afterSuccess: "autoPull" | "offerForcePush" | "none" = "autoPull"
   ) {
     try {
       await fn();
-      if (autoPull) {
+      if (afterSuccess === "autoPull") {
         await this.maybeAutoPull();
+      } else if (afterSuccess === "offerForcePush") {
+        await maybeOfferForcePush(this.svc);
       }
     } catch (err: any) {
       const op = await this.svc.getOperation();
@@ -475,7 +484,7 @@ export class YagiPanel {
   }
 
   refresh() {
-    this.sendState();
+    void this.sendState();
   }
 }
 

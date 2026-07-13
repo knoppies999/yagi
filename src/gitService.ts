@@ -18,6 +18,17 @@ import {
   hasCachedStages,
   rememberConflict,
 } from "./conflictCache";
+import {
+  FS,
+  RS,
+  detectOperationType,
+  parseBranches,
+  parseCommitDetails,
+  parseLog,
+  parseRebaseTodo,
+  parseStatus,
+  parseUnmergedStages,
+} from "./gitParsing";
 
 export {
   Branch,
@@ -28,10 +39,6 @@ export {
   Operation,
   OperationType,
 };
-
-// ASCII field/record separators — safe because they can't appear in git output.
-const FS = "\x1f";
-const RS = "\x1e";
 
 export class GitService {
   constructor(private readonly cwd: string) {}
@@ -98,59 +105,13 @@ export class GitService {
       `--max-count=${limit}`,
       `--pretty=format:${fmt}`,
     ]);
-    return out
-      .split(RS)
-      .map((r) => r.replace(/^\n/, ""))
-      .filter((r) => r.trim().length > 0)
-      .map((record) => {
-        const [hash, parents, author, email, date, subject, refs] =
-          record.split(FS);
-        return {
-          hash,
-          parents: parents ? parents.split(" ").filter(Boolean) : [],
-          author,
-          email,
-          date: parseInt(date, 10),
-          subject,
-          refs: refs
-            ? refs
-                .split(",")
-                .map((r) => r.trim().replace(/^HEAD -> /, ""))
-                .filter(Boolean)
-            : [],
-        };
-      });
+    return parseLog(out);
   }
 
   /** Working tree status via porcelain v1 (stable, script-friendly). */
   async getStatus(): Promise<FileChange[]> {
     const out = await this.run(["status", "--porcelain=v1", "-z"]);
-    const parts = out.split("\0").filter(Boolean);
-    const changes: Omit<FileChange, "resolvable">[] = [];
-    for (let i = 0; i < parts.length; i++) {
-      const entry = parts[i];
-      const index = entry[0];
-      const worktree = entry[1];
-      let path = entry.slice(3);
-      // Renames/copies consume the next NUL-separated token (the source path).
-      if (index === "R" || index === "C") {
-        i++;
-      }
-      // Unmerged (conflict) codes per `git status` docs.
-      const code = index + worktree;
-      const conflicted =
-        code === "DD" ||
-        code === "AA" ||
-        index === "U" ||
-        worktree === "U";
-      changes.push({
-        path,
-        index,
-        worktree,
-        staged: index !== " " && index !== "?" && !conflicted,
-        conflicted,
-      });
-    }
+    const changes = parseStatus(out);
 
     // "Undo Resolution" only makes sense while an operation is actually in
     // progress. If there isn't one, drop anything remembered — it can only
@@ -174,18 +135,7 @@ export class GitService {
   /** All currently-unmerged paths' index stages, keyed by path. */
   private async getUnmergedStages(): Promise<Map<string, ConflictStage[]>> {
     const out = await this.run(["ls-files", "-u", "-z"]);
-    const map = new Map<string, ConflictStage[]>();
-    for (const line of out.split("\0").filter(Boolean)) {
-      // "<mode> <sha> <stage>\t<path>"
-      const tab = line.indexOf("\t");
-      const [mode, sha, stageStr] = line.slice(0, tab).split(" ");
-      const filePath = line.slice(tab + 1);
-      const stage = Number(stageStr) as 1 | 2 | 3;
-      const arr = map.get(filePath) ?? [];
-      arr.push({ mode, sha, stage });
-      map.set(filePath, arr);
-    }
-    return map;
+    return parseUnmergedStages(out);
   }
 
   /**
@@ -219,21 +169,7 @@ export class GitService {
       `--format=${fmt}`,
       "refs/heads",
     ]);
-    return out
-      .split("\n")
-      .filter((l) => l.trim().length > 0)
-      .map((line) => {
-        const [name, head, upstream, track] = line.split(FS);
-        const ahead = /ahead (\d+)/.exec(track || "");
-        const behind = /behind (\d+)/.exec(track || "");
-        return {
-          name,
-          current: head === "*",
-          upstream: upstream || undefined,
-          ahead: ahead ? parseInt(ahead[1], 10) : 0,
-          behind: behind ? parseInt(behind[1], 10) : 0,
-        };
-      });
+    return parseBranches(out);
   }
 
   stage(path: string) {
@@ -266,7 +202,6 @@ export class GitService {
   async getCommitDetails(hash: string): Promise<CommitDetails> {
     const fmt = ["%H", "%P", "%an", "%ae", "%at", "%s", "%b"].join(FS);
     const meta = await this.run(["show", "-s", `--format=${fmt}`, hash]);
-    const [h, parents, author, email, date, subject, body] = meta.split(FS);
 
     // --root makes the initial commit list its files instead of nothing.
     // --no-renames keeps the parser simple (one path per line).
@@ -279,22 +214,7 @@ export class GitService {
       "-z",
       hash,
     ]);
-    const tokens = nameStatus.split("\0").filter((t) => t.length > 0);
-    const files: CommitFile[] = [];
-    for (let i = 0; i + 1 < tokens.length; i += 2) {
-      files.push({ status: tokens[i], path: tokens[i + 1] });
-    }
-
-    return {
-      hash: h,
-      parents: parents ? parents.split(" ").filter(Boolean) : [],
-      author,
-      email,
-      date: parseInt(date, 10),
-      subject,
-      body: (body || "").trim(),
-      files,
-    };
+    return parseCommitDetails(meta, nameStatus);
   }
 
   /** File contents at a given ref (e.g. "HEAD", a commit hash, or ":" for index). */
@@ -390,17 +310,7 @@ export class GitService {
       return null;
     }
     const has = (p: string) => fs.existsSync(path.join(dir, p));
-
-    let type: OperationType | null = null;
-    if (has("rebase-merge") || has("rebase-apply")) {
-      type = "rebase";
-    } else if (has("CHERRY_PICK_HEAD")) {
-      type = "cherry-pick";
-    } else if (has("REVERT_HEAD")) {
-      type = "revert";
-    } else if (has("MERGE_HEAD")) {
-      type = "merge";
-    }
+    const type = detectOperationType(has);
     if (!type) {
       return null;
     }
@@ -504,6 +414,27 @@ export class GitService {
     return this.run(["push", "-u", remote, branch]);
   }
 
+  /**
+   * Force-push the current branch after history was rewritten (rebase).
+   * Uses `--force-with-lease`, which refuses to overwrite the remote if it
+   * has moved since we last saw it — e.g. a teammate pushed in the meantime
+   * — unlike a bare `--force`, which would clobber it unconditionally.
+   */
+  async forcePushWithLease(): Promise<string> {
+    const branch = await this.getCurrentBranch();
+    const branches = await this.getBranches();
+    const hasUpstream = branches.some((b) => b.current && b.upstream);
+    if (hasUpstream) {
+      return this.run(["push", "--force-with-lease"]);
+    }
+    const remotes = await this.getRemotes();
+    const remote = remotes.includes("origin") ? "origin" : remotes[0];
+    if (!remote) {
+      throw new Error("No remote configured to push to.");
+    }
+    return this.run(["push", "--force-with-lease", "-u", remote, branch]);
+  }
+
   // ---- interactive rebase -------------------------------------------------
 
   /** Commits in `base..HEAD`, oldest first (the todo-list order). */
@@ -517,13 +448,7 @@ export class GitService {
       `--format=${fmt}`,
       `${base}..HEAD`,
     ]);
-    return out
-      .split("\n")
-      .filter((l) => l.trim())
-      .map((l) => {
-        const [hash, subject] = l.split(FS);
-        return { hash, subject };
-      });
+    return parseRebaseTodo(out);
   }
 
   /**

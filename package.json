@@ -272,16 +272,29 @@
     "compile:host": "tsc -p ./",
     "compile:webview": "node esbuild.js",
     "check:webview": "tsc -p webview",
-    "watch": "node esbuild.js --watch"
+    "watch": "node esbuild.js --watch",
+    "lint": "eslint src webview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check": "npm run compile && npm run check:webview && npm run lint && npm run test"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/react": "^16.3.2",
     "@types/node": "^20.11.0",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@types/vscode": "^1.90.0",
     "@vscode/vsce": "^3.9.2",
     "esbuild": "^0.28.1",
-    "typescript": "^5.4.0"
+    "eslint": "^10.7.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.7.0",
+    "jsdom": "^29.1.1",
+    "typescript": "^5.4.0",
+    "typescript-eslint": "^8.63.0",
+    "vitest": "^4.1.10"
   },
   "dependencies": {
     "react": "^19.2.7",

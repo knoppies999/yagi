@@ -123,7 +123,11 @@ export function Changes({
     if (e.ctrlKey || e.metaKey) {
       setSelected((prev) => {
         const next = new Set(prev);
-        next.has(path) ? next.delete(path) : next.add(path);
+        if (next.has(path)) {
+          next.delete(path);
+        } else {
+          next.add(path);
+        }
         return next;
       });
       setAnchor(path);
