@@ -33,6 +33,9 @@ export interface Operation {
 export interface Branch {
   name: string;
   current: boolean;
+  /** A remote-tracking branch (refs/remotes/*, e.g. "origin/main") rather than
+   *  a local head. Remote branches never have an upstream/ahead/behind here. */
+  remote: boolean;
   upstream?: string;
   ahead: number;
   behind: number;

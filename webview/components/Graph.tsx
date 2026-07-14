@@ -6,6 +6,17 @@ import type { MenuItem } from "./ContextMenu";
 
 const OVERSCAN = 10; // rows rendered above/below the viewport
 
+// Commit timestamps are absolute (unix seconds); render them in the viewer's
+// local timezone — same basis as the details panel, just without seconds.
+const fmtWhen = (unixSec: number) =>
+  new Date(unixSec * 1000).toLocaleString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
 export function Graph({
   commits,
   currentBranch,
@@ -29,7 +40,7 @@ export function Graph({
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportH, setViewportH] = useState(600);
 
-  const { placed, rowByHash, maxCol } = useMemo(
+  const { placed, edges: layoutEdges, maxCol } = useMemo(
     () => assignLanes(commits),
     [commits]
   );
@@ -106,32 +117,48 @@ export function Graph({
     ];
   };
 
-  // Build SVG segments + rows only for the visible window.
+  // Child node → bend into the travel lane → vertical run → bend into the
+  // parent node's actual column.
+  const edgePath = (e: { fromRow: number; fromCol: number; lane: number; toRow: number; toCol: number }) => {
+    const x1 = x(e.fromCol);
+    const xl = x(e.lane);
+    const x2 = x(e.toCol);
+    const y1 = y(e.fromRow);
+    const y2 = y(e.toRow);
+    if (e.toRow - e.fromRow <= 1) {
+      return `M ${x1} ${y1} C ${x1} ${y1 + ROW_H / 2} ${x2} ${y2 - ROW_H / 2} ${x2} ${y2}`;
+    }
+    let d = `M ${x1} ${y1}`;
+    if (x1 !== xl) d += ` C ${x1} ${y1 + ROW_H} ${xl} ${y1} ${xl} ${y1 + ROW_H}`;
+    d += ` L ${xl} ${y2 - ROW_H}`;
+    if (xl !== x2) d += ` C ${xl} ${y2} ${x2} ${y2 - ROW_H} ${x2} ${y2}`;
+    else d += ` L ${x2} ${y2}`;
+    return d;
+  };
+
+  // Edges are windowed by their whole span, not their endpoints — a
+  // long-running branch must keep its line while both ends are offscreen.
   const edges: React.ReactNode[] = [];
+  layoutEdges.forEach((e, i) => {
+    if (e.toRow < start || e.fromRow >= end) return;
+    edges.push(
+      <path
+        key={i}
+        d={edgePath(e)}
+        fill="none"
+        stroke={LANE_COLORS[e.lane % LANE_COLORS.length]}
+        strokeWidth={2}
+      />
+    );
+  });
+
+  // Nodes + rows only for the visible window.
   const nodes: React.ReactNode[] = [];
   const rows: React.ReactNode[] = [];
 
   for (let row = start; row < end; row++) {
     const p = placed[row];
     const c = p.commit;
-
-    for (const pc of p.parentCols) {
-      const prow = rowByHash.get(pc.hash);
-      if (prow === undefined) continue; // parent not loaded yet
-      const x1 = x(p.col);
-      const y1 = y(row);
-      const x2 = x(pc.col);
-      const y2 = y(prow);
-      edges.push(
-        <path
-          key={c.hash + pc.hash}
-          d={`M ${x1} ${y1} C ${x1} ${y1 + ROW_H} ${x2} ${y2 - ROW_H} ${x2} ${y2}`}
-          fill="none"
-          stroke={LANE_COLORS[pc.col % LANE_COLORS.length]}
-          strokeWidth={2}
-        />
-      );
-    }
 
     nodes.push(
       <circle
@@ -163,7 +190,8 @@ export function Graph({
         ))}
         <span className="subject">{c.subject}</span>
         <span className="meta">
-          {c.author} · {c.hash.slice(0, 7)}
+          <span className="commit-date">{fmtWhen(c.date)}</span> · {c.author} ·{" "}
+          {c.hash.slice(0, 7)}
         </span>
       </div>
     );

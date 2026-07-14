@@ -12,6 +12,8 @@ export type OutMsg =
   | { type: "refresh" }
   | { type: "stage"; path: string }
   | { type: "unstage"; path: string }
+  | { type: "discardChanges"; path: string }
+  | { type: "commitFile"; path: string }
   | { type: "commit"; message: string }
   | { type: "checkout"; branch: string }
   | { type: "openDiff"; path: string; staged: boolean }
@@ -35,6 +37,7 @@ export type OutMsg =
   | { type: "applyRebase"; base: string; todo: string[] }
   | { type: "saveLayout"; layout: Layout }
   | { type: "loadMore" }
+  | { type: "setBranchFilter"; branches: string[] }
   | { type: "resolveConflicts"; paths: string[]; resolution: "ours" | "theirs" }
   | { type: "undoMerge" }
   | { type: "undoResolution"; path: string }
@@ -65,6 +68,13 @@ export type InMsg =
       operation: Operation | null;
       hasMore: boolean;
       forcePush: { branch: string; ahead: number; behind: number } | null;
+      /** How many newest branches the sidebar shows before "Show all"
+       *  (yagi.branchLimit). 0 means no limit. */
+      branchLimit: number;
+      /** Branch names the graph is currently restricted to (empty = all
+       *  branches). Pruned to refs that still exist, so it's authoritative
+       *  for the sidebar's selection checkboxes. */
+      branchFilter: string[];
     }
   | { type: "commitDetails"; details: CommitDetails }
   | { type: "rebaseTodo"; base: string; entries: RebaseEntry[] }

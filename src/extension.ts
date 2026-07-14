@@ -184,6 +184,11 @@ export function activate(context: vscode.ExtensionContext) {
       }
     }),
 
+    vscode.commands.registerCommand("yagi.rebaseInteractive", (arg) => {
+      const name = branchName(arg);
+      if (name) YagiPanel.rebaseInteractive(context, name);
+    }),
+
     vscode.commands.registerCommand("yagi.deleteBranch", async (arg) => {
       const name = branchName(arg);
       const git = await sidebar.getService();
@@ -314,6 +319,76 @@ export function activate(context: vscode.ExtensionContext) {
             `Undo resolution failed: ${err.message ?? err}`
           );
         }
+      }
+      refreshAll();
+    }),
+
+    // ---- changed-file actions (stage / unstage / discard / commit) --------
+    vscode.commands.registerCommand("yagi.stageFile", async (first, all) => {
+      const git = await sidebar.getService();
+      const paths = filePaths(first, all);
+      if (!git || !paths.length) return;
+      for (const p of paths) {
+        try {
+          await git.stage(p);
+        } catch (err: any) {
+          vscode.window.showErrorMessage(`Stage failed: ${err.message ?? err}`);
+        }
+      }
+      refreshAll();
+    }),
+    vscode.commands.registerCommand("yagi.unstageFile", async (first, all) => {
+      const git = await sidebar.getService();
+      const paths = filePaths(first, all);
+      if (!git || !paths.length) return;
+      for (const p of paths) {
+        try {
+          await git.unstage(p);
+        } catch (err: any) {
+          vscode.window.showErrorMessage(`Unstage failed: ${err.message ?? err}`);
+        }
+      }
+      refreshAll();
+    }),
+    vscode.commands.registerCommand("yagi.discardFile", async (first, all) => {
+      const git = await sidebar.getService();
+      const paths = filePaths(first, all);
+      if (!git || !paths.length) return;
+      const ok = await vscode.window.showWarningMessage(
+        paths.length === 1
+          ? `Discard all changes to "${paths[0]}"? This can't be undone.`
+          : `Discard all changes to ${paths.length} files? This can't be undone.`,
+        { modal: true },
+        "Discard"
+      );
+      if (ok !== "Discard") return;
+      for (const p of paths) {
+        try {
+          await git.discardChanges(p);
+        } catch (err: any) {
+          vscode.window.showErrorMessage(`Discard failed: ${err.message ?? err}`);
+        }
+      }
+      refreshAll();
+    }),
+    vscode.commands.registerCommand("yagi.commitFile", async (first, all) => {
+      const git = await sidebar.getService();
+      const paths = filePaths(first, all);
+      if (!git || !paths.length) return;
+      const message = await vscode.window.showInputBox({
+        prompt:
+          paths.length === 1
+            ? `Commit message for ${paths[0]}`
+            : `Commit message for ${paths.length} files`,
+        placeHolder: "Commit message",
+        validateInput: (v) => (v.trim() ? null : "A commit message is required"),
+      });
+      if (!message?.trim()) return;
+      try {
+        for (const p of paths) await git.stage(p);
+        await git.commitPaths(message.trim(), paths);
+      } catch (err: any) {
+        vscode.window.showErrorMessage(`Commit failed: ${err.message ?? err}`);
       }
       refreshAll();
     })

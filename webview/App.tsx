@@ -28,6 +28,8 @@ export function App() {
   const [forcePush, setForcePush] = useState<ForcePushInfo | null>(null);
   const [notRepo, setNotRepo] = useState<{ path?: string } | null>(null);
   const [hasMore, setHasMore] = useState(false);
+  const [branchLimit, setBranchLimit] = useState(25);
+  const [branchFilter, setBranchFilter] = useState<string[]>([]);
   const [loadingMore, setLoadingMore] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(true);
 
@@ -56,6 +58,8 @@ export function App() {
           setStatus(msg.status);
           setOperation(msg.operation);
           setHasMore(msg.hasMore);
+          setBranchLimit(msg.branchLimit);
+          setBranchFilter(msg.branchFilter);
           setLoadingMore(false);
           setForcePush(msg.forcePush);
           break;
@@ -159,6 +163,9 @@ export function App() {
         ) : (
           <Branches
             branches={branches}
+            limit={branchLimit}
+            selected={branchFilter}
+            onSelect={(names) => post({ type: "setBranchFilter", branches: names })}
             onMenu={showMenu}
             onCollapse={() => toggleCollapse("collapsedSidebar")}
           />

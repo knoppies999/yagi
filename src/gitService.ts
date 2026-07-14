@@ -94,16 +94,28 @@ export class GitService {
     }
   }
 
-  /** Parse `git log` into commits, newest first. */
-  async getLog(limit = 200): Promise<Commit[]> {
+  /**
+   * Parse `git log` into commits, newest first. By default walks every ref
+   * (`--all`). Pass `refs` (branch names) to restrict the walk to just those
+   * branches, so the graph shows only the selected branches and how they
+   * relate to one another.
+   */
+  async getLog(limit = 200, refs?: string[]): Promise<Commit[]> {
     // %H hash, %P parents, %an author, %ae email, %at authored unix time,
     // %s subject, %D ref names.
     const fmt = ["%H", "%P", "%an", "%ae", "%at", "%s", "%D"].join(FS) + RS;
+    const scoped = refs && refs.length > 0;
     const out = await this.run([
       "log",
-      "--all",
+      // The graph layout requires every child to appear before its parents;
+      // the default (commit-date) order breaks that under clock skew, e.g.
+      // after rebases or merging long-lived branches.
+      "--date-order",
       `--max-count=${limit}`,
       `--pretty=format:${fmt}`,
+      // Options must precede the revision list; `--` (end-of-revisions) must be
+      // the final token so a branch that shares a path's name isn't misread.
+      ...(scoped ? [...refs, "--"] : ["--all"]),
     ]);
     return parseLog(out);
   }
@@ -156,18 +168,27 @@ export class GitService {
     await this.run(["checkout", "-m", "--", path]);
   }
 
-  async getBranches(): Promise<Branch[]> {
+  /**
+   * List branches sorted newest-first (by latest commit). By default only
+   * local heads; pass `includeRemotes` to also include remote-tracking
+   * branches (refs/remotes/*), which the panel shows in its sidebar.
+   */
+  async getBranches(includeRemotes = false): Promise<Branch[]> {
     const fmt = [
+      "%(refname)",
       "%(refname:short)",
       "%(HEAD)",
       "%(upstream:short)",
       "%(upstream:track)",
     ].join(FS);
+    const refs = includeRemotes
+      ? ["refs/heads", "refs/remotes"]
+      : ["refs/heads"];
     const out = await this.run([
       "for-each-ref",
       "--sort=-committerdate",
       `--format=${fmt}`,
-      "refs/heads",
+      ...refs,
     ]);
     return parseBranches(out);
   }
@@ -182,6 +203,32 @@ export class GitService {
 
   commit(message: string) {
     return this.run(["commit", "-m", message]);
+  }
+
+  /** Commit only the given paths (`--only` semantics) with `message`, leaving
+   *  any other staged changes untouched. Stage untracked paths first. */
+  commitPaths(message: string, paths: string[]) {
+    return this.run(["commit", "-m", message, "--", ...paths]);
+  }
+
+  /**
+   * Discard a path's changes back to HEAD (Fork's "Discard"). State-agnostic:
+   * unstage anything staged, restore a tracked file to HEAD, and if that fails
+   * (the path is untracked or newly added) remove it from the working tree.
+   * Destructive — callers confirm first.
+   */
+  async discardChanges(path: string): Promise<void> {
+    try {
+      await this.run(["reset", "-q", "HEAD", "--", path]);
+    } catch {
+      /* nothing staged for this path — fine */
+    }
+    try {
+      await this.run(["checkout", "HEAD", "--", path]);
+    } catch {
+      // Not in HEAD (untracked / new) — drop it from the working tree.
+      await this.run(["clean", "-fd", "--", path]);
+    }
   }
 
   checkout(branch: string) {
@@ -437,7 +484,12 @@ export class GitService {
 
   // ---- interactive rebase -------------------------------------------------
 
-  /** Commits in `base..HEAD`, oldest first (the todo-list order). */
+  /**
+   * Commits in `base..HEAD`, oldest first (the todo-list order). Merge commits
+   * are excluded: a plain interactive rebase linearizes history and `pick`
+   * rejects merges ("'pick' does not accept merge commits"), so the todo must
+   * contain only the non-merge commits git itself would replay.
+   */
   async getRebaseTodo(
     base: string
   ): Promise<{ hash: string; subject: string }[]> {
@@ -445,6 +497,7 @@ export class GitService {
     const out = await this.run([
       "log",
       "--reverse",
+      "--no-merges",
       `--format=${fmt}`,
       `${base}..HEAD`,
     ]);
@@ -455,6 +508,12 @@ export class GitService {
    * Run a non-interactive "interactive" rebase: we hand git a pre-built todo
    * file via GIT_SEQUENCE_EDITOR (a `cp` that overwrites git's todo file with
    * ours). `todoLines` are full lines like "pick <hash>" / "squash <hash>".
+   *
+   * `--empty=drop` so a commit that becomes empty (its change is already
+   * present, or a conflict was resolved to nothing) is dropped automatically
+   * instead of halting the rebase — a scripted todo can't answer git's "this
+   * is now empty, skip it?" prompt. The setting is recorded in the rebase
+   * state, so `git rebase --continue` honours it after conflict resolution too.
    */
   async interactiveRebase(base: string, todoLines: string[]): Promise<string> {
     const todoPath = path.join(
@@ -468,7 +527,7 @@ export class GitService {
     const src = todoPath.replace(/\\/g, "/");
     const seqEditor = `cp '${src}'`;
     try {
-      return await this.run(["rebase", "-i", base], {
+      return await this.run(["rebase", "-i", "--empty=drop", base], {
         GIT_SEQUENCE_EDITOR: seqEditor,
       });
     } finally {
