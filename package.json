@@ -2,10 +2,9 @@
   "name": "yagi-git-interface",
   "displayName": "YAGI — Yet Another Git Interface",
   "description": "A Fork-like graphical Git client inside VS Code: commit graph, staging, merge conflicts, interactive rebase, and remotes.",
-  "version": "0.1.2",
+  "version": "1.0.0",
   "publisher": "RuanduPlessis",
   "license": "MIT",
-  "preview": true,
   "icon": "media/icon.png",
   "galleryBanner": {
     "color": "#1E1E2E",

@@ -2,6 +2,36 @@
 
 All notable changes to YAGI are documented here.
 
+## 1.0.0
+
+First stable release.
+
+**Branch panel**
+- New `yagi.branchLimit` setting (default 25): show only the newest branches
+  by latest commit, with a "Show all" toggle; older branches stay searchable.
+- Remote-tracking branches are now listed, grouped into Local / Remote
+  sections. The limit applies to each section independently so many recent
+  remotes can't crowd local branches out of the list.
+- Click a branch to select it for the graph filter — the graph then shows only
+  the selected branches and how they relate. Clicking no longer checks out
+  (in the panel or the tree view), so branches can't be switched by accident;
+  checkout moved to the hover button and context menu.
+
+**Commit graph**
+- Each row now shows the commit's date and time (in your local timezone)
+  before the hash.
+- Reworked lane assignment so branch lines no longer leak to the bottom of
+  the graph.
+
+**Changed files**
+- Per-file actions in both the panel and the tree view: Stage, Unstage,
+  Commit this file (with a message), and Discard changes (revert to HEAD).
+
+**Interactive rebase**
+- "Rebase current branch onto this (interactive)" added to both branch menus.
+- Excludes merge commits from the generated todo, and drops commits that
+  become empty, so scripted rebases no longer stall.
+
 ## 0.1.2
 
 **Docs**
