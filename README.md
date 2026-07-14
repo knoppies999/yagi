@@ -14,7 +14,7 @@ No app-switching, no separate window — just your editor.
 
 </div>
 
-![YAGI commit graph, branches, and remotes inside VS Code](https://raw.githubusercontent.com/knoppies999/yagi/main/media/screenshot.png)
+![YAGI commit graph, branches, and remotes inside VS Code](media/screenshot.png)
 
 ---
 
