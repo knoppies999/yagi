@@ -25,6 +25,9 @@ export class YagiPanel {
   private root = "";
   private openedFolder = "";
   private commitLimit = 200; // grows as the user loads more history
+  private branchFilter: string[] = []; // graph restricted to these refs (empty = all)
+  private ready = false; // the webview has mounted and can receive messages
+  private pendingRebaseBase: string | undefined; // rebase requested before ready
   private debounce: NodeJS.Timeout | undefined;
   private stateGeneration = 0; // bumped per sendState() call so stale in-flight responses are dropped
   private disposables: vscode.Disposable[] = [];
@@ -103,6 +106,7 @@ export class YagiPanel {
       this.root = root;
       this.git = new GitService(root);
       this.commitLimit = 200; // reset paging for the new repo
+      this.branchFilter = []; // the old repo's branches don't apply here
       void this.setupGitDirWatcher();
     }
     return true;
@@ -141,17 +145,30 @@ export class YagiPanel {
     try {
       switch (msg.type) {
         case "ready":
+          this.ready = true;
           this.post({
             type: "layout",
             layout: this.context.globalState.get(LAYOUT_KEY) ?? null,
           });
           await this.sendState();
+          // A rebase requested from the sidebar before the webview mounted
+          // (e.g. it opened the panel) runs now that the modal can appear.
+          if (this.pendingRebaseBase !== undefined) {
+            const base = this.pendingRebaseBase;
+            this.pendingRebaseBase = undefined;
+            await this.requestInteractiveRebase(base);
+          }
           break;
         case "refresh":
           await this.sendState();
           break;
         case "loadMore":
           this.commitLimit += 300;
+          await this.sendState();
+          break;
+        case "setBranchFilter":
+          this.branchFilter = msg.branches;
+          this.commitLimit = 200; // a new scope starts paging over
           await this.sendState();
           break;
         case "saveLayout":
@@ -168,6 +185,12 @@ export class YagiPanel {
         case "commit":
           await this.svc.commit(msg.message);
           await this.sendState();
+          break;
+        case "discardChanges":
+          await this.discardFile(msg.path);
+          break;
+        case "commitFile":
+          await this.commitSingleFile(msg.path);
           break;
         case "checkout":
           await this.svc.checkout(msg.branch);
@@ -212,17 +235,9 @@ export class YagiPanel {
         }
 
         // --- interactive rebase -------------------------------------------
-        case "requestRebase": {
-          const entries = await this.svc.getRebaseTodo(msg.base);
-          if (!entries.length) {
-            vscode.window.showInformationMessage(
-              "No commits after that one to rebase."
-            );
-          } else {
-            this.post({ type: "rebaseTodo", base: msg.base, entries });
-          }
+        case "requestRebase":
+          await this.requestInteractiveRebase(msg.base);
           break;
-        }
         case "applyRebase":
           await this.tryOp(
             () => this.svc.interactiveRebase(msg.base, msg.todo),
@@ -432,6 +447,40 @@ export class YagiPanel {
     await autoPullIfEnabled(this.svc);
   }
 
+  /** Discard a file's changes back to HEAD after a modal confirmation. */
+  private async discardFile(path: string) {
+    const ok = await vscode.window.showWarningMessage(
+      `Discard all changes to "${path}"? This can't be undone.`,
+      { modal: true },
+      "Discard"
+    );
+    if (ok !== "Discard") return;
+    try {
+      await this.svc.discardChanges(path);
+    } catch (err: any) {
+      vscode.window.showErrorMessage(`Discard failed: ${err.message ?? err}`);
+    }
+    await this.sendState();
+  }
+
+  /** Prompt for a message and commit just this file (staging it first so an
+   *  untracked/new file is included). */
+  private async commitSingleFile(path: string) {
+    const message = await vscode.window.showInputBox({
+      prompt: `Commit message for ${path}`,
+      placeHolder: "Commit message",
+      validateInput: (v) => (v.trim() ? null : "A commit message is required"),
+    });
+    if (!message?.trim()) return;
+    try {
+      await this.svc.stage(path);
+      await this.svc.commitPaths(message.trim(), [path]);
+    } catch (err: any) {
+      vscode.window.showErrorMessage(`Commit failed: ${err.message ?? err}`);
+    }
+    await this.sendState();
+  }
+
   /** Run a network op with a VS Code progress notification. */
   private withProgress<T>(title: string, fn: () => Promise<T>): Thenable<T> {
     return vscode.window.withProgress(
@@ -453,17 +502,24 @@ export class YagiPanel {
       this.post({ type: "notRepo", path: this.openedFolder });
       return;
     }
-    const [commits, status, branches, operation, forcePush] = await Promise.all([
-      this.svc.getLog(this.commitLimit),
+    const [status, branches, operation, forcePush] = await Promise.all([
       this.svc.getStatus(),
-      this.svc.getBranches(),
+      this.svc.getBranches(true),
       this.svc.getOperation(),
       checkNeedsForcePush(this.svc, this.root),
     ]);
+    // Prune the graph filter to refs that still exist (a selected branch may
+    // have been deleted) — a stale ref would make `git log` fail outright.
+    const existing = new Set(branches.map((b) => b.name));
+    this.branchFilter = this.branchFilter.filter((n) => existing.has(n));
+    const commits = await this.svc.getLog(this.commitLimit, this.branchFilter);
     if (generation !== this.stateGeneration) return; // superseded — drop it
     setBranch(branches.find((b) => b.current)?.name);
     // If we filled the limit, there are (probably) older commits to load.
     const hasMore = commits.length >= this.commitLimit;
+    const branchLimit = vscode.workspace
+      .getConfiguration("yagi")
+      .get<number>("branchLimit", 25);
     this.post({
       type: "state",
       commits,
@@ -472,6 +528,8 @@ export class YagiPanel {
       operation,
       hasMore,
       forcePush,
+      branchLimit,
+      branchFilter: this.branchFilter,
     });
   }
 
@@ -524,6 +582,39 @@ export class YagiPanel {
 
   refresh() {
     void this.sendState();
+  }
+
+  /**
+   * Open (or reveal) the panel and start an interactive rebase of the current
+   * branch onto `base`. Called from the sidebar's branch menus. If the webview
+   * isn't mounted yet, the request is queued until it signals "ready".
+   */
+  static rebaseInteractive(context: vscode.ExtensionContext, base: string) {
+    YagiPanel.createOrShow(context);
+    void YagiPanel.current?.startInteractiveRebase(base);
+  }
+
+  private async startInteractiveRebase(base: string) {
+    this.panel.reveal();
+    if (this.ready) {
+      await this.requestInteractiveRebase(base);
+    } else {
+      this.pendingRebaseBase = base; // runs from the "ready" handler
+    }
+  }
+
+  /** Build the todo for `base..HEAD` and open the rebase modal (or note it's
+   *  empty). Shared by the webview's request and the sidebar entry point. */
+  private async requestInteractiveRebase(base: string) {
+    if (!(await this.ensureRepo())) return;
+    const entries = await this.svc.getRebaseTodo(base);
+    if (!entries.length) {
+      vscode.window.showInformationMessage(
+        `No commits on the current branch after ${base} to rebase.`
+      );
+    } else {
+      this.post({ type: "rebaseTodo", base, entries });
+    }
   }
 }
 

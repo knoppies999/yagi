@@ -173,7 +173,9 @@ export class SidebarProvider implements vscode.TreeDataProvider<Node> {
           ? "conflictFile"
           : f.resolvable
           ? "resolvableFile"
-          : "file";
+          : f.staged
+          ? "stagedFile"
+          : "unstagedFile";
         return item;
       }
       case "branch": {
@@ -185,14 +187,12 @@ export class SidebarProvider implements vscode.TreeDataProvider<Node> {
         if (b.ahead || b.behind) {
           item.description = `↑${b.ahead} ↓${b.behind}`;
         }
-        item.tooltip = b.current ? "Current branch" : `Checkout ${b.name}`;
-        if (!b.current) {
-          item.command = {
-            command: "yagi.checkoutBranch",
-            title: "Checkout",
-            arguments: [b.name],
-          };
-        }
+        // No click-to-checkout: switching branches by a stray click is too
+        // easy to do by accident. Checkout stays on the hover/inline button
+        // and the right-click menu (see package.json view/item/context).
+        item.tooltip = b.current
+          ? "Current branch"
+          : `${b.name} — use the checkout button or right-click`;
         item.contextValue = b.current ? "currentBranch" : "branch";
         return item;
       }

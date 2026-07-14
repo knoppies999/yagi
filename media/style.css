@@ -120,6 +120,23 @@ body.resizing-h {
   font-size: 12px;
 }
 
+.branch-more {
+  display: block;
+  width: 100%;
+  margin: 4px 0 0;
+  padding: 4px 7px;
+  background: none;
+  border: none;
+  color: var(--vscode-textLink-foreground);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.branch-more:hover {
+  text-decoration: underline;
+}
+
 .sidebar,
 .graph-pane,
 .changes-pane {
@@ -252,8 +269,13 @@ button.danger {
   background: var(--vscode-list-hoverBackground);
 }
 .branch.current {
-  cursor: default;
   font-weight: 600;
+}
+.branch.selected {
+  background: var(--vscode-list-activeSelectionBackground, var(--vscode-list-hoverBackground));
+}
+.branch.selected:hover {
+  background: var(--vscode-list-activeSelectionBackground, var(--vscode-list-hoverBackground));
 }
 .branch-icon {
   font-size: 9px;
@@ -267,6 +289,51 @@ button.danger {
 .branch-track {
   font-size: 10px;
   opacity: 0.6;
+}
+
+.branch-group {
+  padding: 6px 4px 2px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.55;
+  cursor: default;
+}
+
+.branch.remote .branch-name {
+  opacity: 0.8;
+}
+
+.branch-check {
+  margin: 0;
+  flex: 0 0 auto;
+  cursor: pointer;
+  accent-color: var(--vscode-checkbox-selectBackground, var(--vscode-focusBorder));
+}
+
+.branch-filter-note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin: 0 0 6px;
+  padding: 4px 7px;
+  font-size: 11px;
+  border-radius: 5px;
+  background: var(--vscode-editor-inactiveSelectionBackground, rgba(128, 128, 128, 0.15));
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--vscode-textLink-foreground);
+  font: inherit;
+  cursor: pointer;
+  padding: 0;
+}
+
+.link-btn:hover {
+  text-decoration: underline;
 }
 
 /* ---- graph pane ---- */
@@ -343,6 +410,10 @@ button.danger {
   opacity: 0.55;
   font-size: 11px;
   flex-shrink: 0;
+  white-space: nowrap;
+}
+.commit-date {
+  font-variant-numeric: tabular-nums;
 }
 .ref {
   background: var(--vscode-badge-background);

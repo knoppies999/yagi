@@ -91,23 +91,32 @@ export function parseUnmergedStages(out: string): Map<string, ConflictStage[]> {
   return map;
 }
 
-/** Parse `git for-each-ref` (name<FS>HEAD<FS>upstream<FS>track per line). */
+/**
+ * Parse `git for-each-ref`
+ * (fullRef<FS>shortName<FS>HEAD<FS>upstream<FS>track per line). The full ref
+ * name classifies local heads vs remote-tracking branches; the short name is
+ * what we display. The symbolic `refs/remotes/<remote>/HEAD` pointer is
+ * dropped — it's an alias for the remote's default branch, not a branch.
+ */
 export function parseBranches(out: string): Branch[] {
-  return out
-    .split("\n")
-    .filter((l) => l.trim().length > 0)
-    .map((line) => {
-      const [name, head, upstream, track] = line.split(FS);
-      const ahead = /ahead (\d+)/.exec(track || "");
-      const behind = /behind (\d+)/.exec(track || "");
-      return {
-        name,
-        current: head === "*",
-        upstream: upstream || undefined,
-        ahead: ahead ? parseInt(ahead[1], 10) : 0,
-        behind: behind ? parseInt(behind[1], 10) : 0,
-      };
+  const branches: Branch[] = [];
+  for (const line of out.split("\n")) {
+    if (line.trim().length === 0) continue;
+    const [fullRef, name, head, upstream, track] = line.split(FS);
+    if (/^refs\/remotes\/[^/]+\/HEAD$/.test(fullRef)) continue;
+    const remote = fullRef.startsWith("refs/remotes/");
+    const ahead = /ahead (\d+)/.exec(track || "");
+    const behind = /behind (\d+)/.exec(track || "");
+    branches.push({
+      name,
+      current: head === "*",
+      remote,
+      upstream: upstream || undefined,
+      ahead: ahead ? parseInt(ahead[1], 10) : 0,
+      behind: behind ? parseInt(behind[1], 10) : 0,
     });
+  }
+  return branches;
 }
 
 /**

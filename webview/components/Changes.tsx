@@ -95,6 +95,24 @@ export function Changes({
   const resolve = (paths: string[], resolution: "ours" | "theirs") =>
     post({ type: "resolveConflicts", paths, resolution });
 
+  // Right-click menu for a normal (non-conflict) changed file: the staging
+  // toggle for its side, commit-with-message, and a destructive discard.
+  const fileMenu = (c: FileChange, kind: "staged" | "unstaged"): MenuItem[] => [
+    kind === "staged"
+      ? { label: "Unstage", onClick: () => post({ type: "unstage", path: c.path }) }
+      : { label: "Stage", onClick: () => post({ type: "stage", path: c.path }) },
+    {
+      label: "Commit this file…",
+      onClick: () => post({ type: "commitFile", path: c.path }),
+    },
+    { separator: true },
+    {
+      label: "Discard changes…",
+      danger: true,
+      onClick: () => post({ type: "discardChanges", path: c.path }),
+    },
+  ];
+
   const conflictMenu = (paths: string[]): MenuItem[] => [
     {
       label: `Accept All Incoming (${paths.length})`,
@@ -214,7 +232,7 @@ export function Changes({
                             post({ type: "undoResolution", path: c.path }),
                         },
                       ])
-                  : undefined
+                  : (e) => onMenu(e, fileMenu(c, "staged"))
               }
             />
           ))}
@@ -225,7 +243,12 @@ export function Changes({
         <h3>Unstaged ({unstaged.length})</h3>
         <ul>
           {unstaged.map((c) => (
-            <FileRow key={c.path} change={c} kind="unstaged" />
+            <FileRow
+              key={c.path}
+              change={c}
+              kind="unstaged"
+              onContextMenu={(e) => onMenu(e, fileMenu(c, "unstaged"))}
+            />
           ))}
         </ul>
       </div>

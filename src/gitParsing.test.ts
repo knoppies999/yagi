@@ -146,14 +146,15 @@ describe("parseBranches", () => {
 
   it("parses current flag, upstream, and ahead/behind", () => {
     const out = [
-      ["main", "*", "origin/main", "[ahead 2, behind 1]"].join(FS),
-      ["feature", "", "", ""].join(FS),
-      ["tracked", "", "origin/tracked", "[behind 3]"].join(FS),
+      ["refs/heads/main", "main", "*", "origin/main", "[ahead 2, behind 1]"].join(FS),
+      ["refs/heads/feature", "feature", "", "", ""].join(FS),
+      ["refs/heads/tracked", "tracked", "", "origin/tracked", "[behind 3]"].join(FS),
     ].join("\n");
     const branches = parseBranches(out);
     expect(branches[0]).toEqual({
       name: "main",
       current: true,
+      remote: false,
       upstream: "origin/main",
       ahead: 2,
       behind: 1,
@@ -161,11 +162,29 @@ describe("parseBranches", () => {
     expect(branches[1]).toEqual({
       name: "feature",
       current: false,
+      remote: false,
       upstream: undefined,
       ahead: 0,
       behind: 0,
     });
     expect(branches[2]).toMatchObject({ upstream: "origin/tracked", behind: 3, ahead: 0 });
+  });
+
+  it("flags remote-tracking branches and drops the symbolic origin/HEAD", () => {
+    const out = [
+      ["refs/heads/main", "main", "*", "origin/main", ""].join(FS),
+      ["refs/remotes/origin/HEAD", "origin/HEAD", "", "", ""].join(FS),
+      ["refs/remotes/origin/feature", "origin/feature", "", "", ""].join(FS),
+    ].join("\n");
+    const branches = parseBranches(out);
+    // origin/HEAD is skipped; only main + origin/feature remain.
+    expect(branches.map((b) => b.name)).toEqual(["main", "origin/feature"]);
+    expect(branches[0].remote).toBe(false);
+    expect(branches[1]).toMatchObject({
+      name: "origin/feature",
+      remote: true,
+      current: false,
+    });
   });
 });
 
