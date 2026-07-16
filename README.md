@@ -41,6 +41,14 @@ rendering is virtualized, and history loads incrementally as you scroll
 ("load more" paging), so a 50,000-commit repo opens as quickly as a 50-commit
 one.
 
+### 🔗 Squash & rebase-merge tracking
+Squash and rebase merges rewrite your branch's commits under new SHAs, so a
+normal graph shows no connection back to the branch you merged — it just looks
+deleted. YAGI detects these (via patch-id equivalence) and draws a **solid
+merge line** to the commit that absorbed the work, with a **"merged"** badge in
+both the graph and the branch list. Detection runs off the main thread and is
+cached, and can be disabled on very large repos (`yagi.showMergedBranches`).
+
 ### 🔍 Commit details
 Click any commit to see its full message, author, parents, and changed
 files — click a file to open it in VS Code's native diff editor.
@@ -67,7 +75,8 @@ sync with the remote (`yagi.pullAfterOperations`).
 - An **Activity Bar sidebar** mirrors the current branch, changed files, and
   full branch tree — for quick actions without opening the full panel.
 - **Resizable, collapsible panes** remembered forever, per user.
-- A **branch filter** so repositories with 100+ branches stay navigable.
+- A **branch filter** so repositories with 100+ branches stay navigable, with
+  the checked-out branch always pinned to the top of the list.
 - Automatic **repository discovery**: open a parent folder containing
   several repos and YAGI finds them (or lets you pick).
 
@@ -85,6 +94,8 @@ That's it — no configuration required.
 | Setting | Default | Description |
 |---|---|---|
 | `yagi.pullAfterOperations` | `true` | After push, merge, rebase, cherry-pick, or revert, automatically pull the current branch's upstream. |
+| `yagi.branchLimit` | `25` | Number of most-recently-updated branches to show per section before "Show all". `0` shows every branch. |
+| `yagi.showMergedBranches` | `true` | Detect and draw a merge line for branches squash/rebase-merged into the current branch. Turn off if it's slow on very large repositories. |
 
 ## Requirements
 

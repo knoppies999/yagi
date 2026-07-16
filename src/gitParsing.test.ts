@@ -8,6 +8,8 @@ import {
   parseBranches,
   parseCommitDetails,
   parseRebaseTodo,
+  parsePatchId,
+  parsePatchIds,
   detectOperationType,
 } from "./gitParsing";
 
@@ -246,5 +248,52 @@ describe("detectOperationType", () => {
   it("prefers rebase when multiple markers coexist", () => {
     // A rebase that merges leaves MERGE_HEAD around too; rebase must win.
     expect(detectOperationType(has(["MERGE_HEAD", "rebase-merge"]))).toBe("rebase");
+  });
+});
+
+describe("parsePatchIds", () => {
+  it("maps each patch-id to the commit that produced it", () => {
+    // `git log -p | git patch-id --stable` emits "<patchId> <commit>" per commit.
+    const out = [
+      "aaaa111 c0mmit1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "bbbb222 c0mmit2bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    ].join("\n");
+    const map = parsePatchIds(out);
+    expect(map.get("aaaa111")).toBe("c0mmit1aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    expect(map.get("bbbb222")).toBe("c0mmit2bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    expect(map.size).toBe(2);
+  });
+
+  it("lets a later duplicate patch-id win (any match is a valid target)", () => {
+    const out = ["dup c0mmitOld", "dup c0mmitNew"].join("\n");
+    expect(parsePatchIds(out).get("dup")).toBe("c0mmitNew");
+  });
+
+  it("ignores blank / malformed lines", () => {
+    const out = ["", "   ", "noSpaceToken", "good c0mmit"].join("\n");
+    const map = parsePatchIds(out);
+    expect(map.size).toBe(1);
+    expect(map.get("good")).toBe("c0mmit");
+  });
+
+  it("returns an empty map for empty output", () => {
+    expect(parsePatchIds("").size).toBe(0);
+  });
+});
+
+describe("parsePatchId", () => {
+  it("takes the first token (a bare `git diff | patch-id` has a zero commit)", () => {
+    expect(parsePatchId("abcdef123 0000000000000000000000000000000000000000")).toBe(
+      "abcdef123"
+    );
+  });
+
+  it("trims trailing newline", () => {
+    expect(parsePatchId("abcdef123 0000000\n")).toBe("abcdef123");
+  });
+
+  it("returns null for empty input (no diff to hash)", () => {
+    expect(parsePatchId("")).toBeNull();
+    expect(parsePatchId("   \n")).toBeNull();
   });
 });

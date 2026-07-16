@@ -3,6 +3,7 @@ import type {
   Commit,
   CommitDetails,
   FileChange,
+  MergedBranch,
   Operation,
 } from "../src/types";
 
@@ -75,6 +76,23 @@ export type InMsg =
        *  branches). Pruned to refs that still exist, so it's authoritative
        *  for the sidebar's selection checkboxes. */
       branchFilter: string[];
+    }
+  | {
+      // Lightweight graph-only update for a branch-filter change: only the
+      // scoped commit walk is recomputed, so toggling branches doesn't trigger
+      // a full repo snapshot (status/branches/operation/force-push are
+      // unchanged by a selection). See sendGraph() in yagiPanel.ts.
+      type: "graph";
+      commits: Commit[];
+      hasMore: boolean;
+      branchFilter: string[];
+    }
+  | {
+      // Squash/rebase-merged branches detected out-of-band and sent AFTER the
+      // graph (detection is expensive), so merge lines appear a beat later
+      // without delaying the paint. Keyed to the branches currently in scope.
+      type: "merged";
+      mergedBranches: MergedBranch[];
     }
   | { type: "commitDetails"; details: CommitDetails }
   | { type: "rebaseTodo"; base: string; entries: RebaseEntry[] }

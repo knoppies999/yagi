@@ -4,6 +4,7 @@ import type {
   Commit,
   CommitDetails as Details,
   FileChange,
+  MergedBranch,
   Operation,
 } from "../src/types";
 import type { InMsg, RebaseEntry } from "./messages";
@@ -30,6 +31,7 @@ export function App() {
   const [hasMore, setHasMore] = useState(false);
   const [branchLimit, setBranchLimit] = useState(25);
   const [branchFilter, setBranchFilter] = useState<string[]>([]);
+  const [merged, setMerged] = useState<MergedBranch[]>([]);
   const [loadingMore, setLoadingMore] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(true);
 
@@ -62,6 +64,17 @@ export function App() {
           setBranchFilter(msg.branchFilter);
           setLoadingMore(false);
           setForcePush(msg.forcePush);
+          break;
+        case "graph":
+          // Branch-filter change: only the graph moved; leave everything else.
+          setCommits(msg.commits);
+          setHasMore(msg.hasMore);
+          setBranchFilter(msg.branchFilter);
+          setLoadingMore(false);
+          break;
+        case "merged":
+          // Squash/rebase-merge lines, delivered a beat after the graph.
+          setMerged(msg.mergedBranches);
           break;
         case "commitDetails":
           // Ignore stale responses for a commit no longer selected.
@@ -165,6 +178,7 @@ export function App() {
             branches={branches}
             limit={branchLimit}
             selected={branchFilter}
+            mergedNames={new Set(merged.map((m) => m.branch))}
             onSelect={(names) => post({ type: "setBranchFilter", branches: names })}
             onMenu={showMenu}
             onCollapse={() => toggleCollapse("collapsedSidebar")}
@@ -190,6 +204,7 @@ export function App() {
           <Graph
             commits={commits}
             currentBranch={currentBranch}
+            merged={merged}
             selected={selected}
             hasMore={hasMore}
             loading={loadingMore}

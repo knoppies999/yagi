@@ -35,13 +35,18 @@ const remoteBranch = (name: string): Branch => ({
 function renderBranches(
   branches: Branch[],
   limit: number,
-  extra: { selected?: string[]; onSelect?: (names: string[]) => void } = {}
+  extra: {
+    selected?: string[];
+    mergedNames?: Set<string>;
+    onSelect?: (names: string[]) => void;
+  } = {}
 ) {
   return render(
     <Branches
       branches={branches}
       limit={limit}
       selected={extra.selected ?? []}
+      mergedNames={extra.mergedNames ?? new Set()}
       onSelect={extra.onSelect ?? noop}
       onMenu={noop}
       onCollapse={noop}
@@ -75,8 +80,15 @@ describe("Branches limiting", () => {
     renderBranches(makeBranches(30, 29), 3);
     const names = shownNames();
     expect(names).toContain("b29");
-    // 3 newest + the pinned current branch.
+    // 3 newest + the pinned current branch, and it's floated to the very top.
     expect(names).toHaveLength(4);
+    expect(names[0]).toBe("b29");
+  });
+
+  it("pins the current branch to the top even when it's already within view", () => {
+    // b7 is current but sits mid-list by commit date; it should jump to top.
+    renderBranches(makeBranches(10, 7), 0);
+    expect(shownNames()[0]).toBe("b7");
   });
 
   it("limit of 0 shows every branch with no toggle", () => {
@@ -102,6 +114,37 @@ describe("Branches local vs remote", () => {
     expect(screen.getByText("Local")).toBeDefined();
     expect(screen.getByText("Remote")).toBeDefined();
     expect(screen.getByText("origin/api")).toBeDefined();
+  });
+
+  it("pins the current branch's upstream to the top of the remote list", () => {
+    const { container } = render(
+      <Branches
+        branches={[
+          {
+            name: "main",
+            current: true,
+            remote: false,
+            upstream: "origin/main",
+            ahead: 0,
+            behind: 0,
+          },
+          remoteBranch("origin/api"),
+          remoteBranch("origin/zebra"),
+          remoteBranch("origin/main"),
+        ]}
+        limit={0}
+        selected={[]}
+        mergedNames={new Set()}
+        onSelect={noop}
+        onMenu={noop}
+        onCollapse={noop}
+      />
+    );
+    const remotes = Array.from(container.querySelectorAll(".branch-name"))
+      .map((e) => e.textContent)
+      .filter((n) => n?.startsWith("origin/"));
+    // origin/main is the current branch's upstream — floated above api/zebra.
+    expect(remotes[0]).toBe("origin/main");
   });
 
   it("omits section headers when there are no remote branches", () => {
@@ -139,6 +182,7 @@ describe("Branches local vs remote", () => {
         branches={[remoteBranch("origin/feature/api")]}
         limit={0}
         selected={[]}
+        mergedNames={new Set()}
         onSelect={noop}
         onMenu={(_e, i) => (items = i)}
         onCollapse={noop}

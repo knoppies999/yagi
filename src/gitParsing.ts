@@ -120,6 +120,34 @@ export function parseBranches(out: string): Branch[] {
 }
 
 /**
+ * Parse `git patch-id --stable` output into a patch-id → commit-hash map.
+ * Each line is "<patch-id> <commit-id>"; when the input came from `git log -p`
+ * the second column is the commit that produced the diff (for a bare `git diff`
+ * it's all-zeros, which callers ignore). A patch-id identifies a change by its
+ * content, independent of the commit SHA — so two commits that apply the same
+ * change (e.g. a branch and its squash on main) share one id. Later duplicates
+ * win, which is fine: any matching commit is an equally valid merge target.
+ */
+export function parsePatchIds(out: string): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const line of out.split("\n")) {
+    const sp = line.indexOf(" ");
+    if (sp <= 0) continue;
+    const patchId = line.slice(0, sp);
+    const commit = line.slice(sp + 1).trim();
+    if (patchId) map.set(patchId, commit);
+  }
+  return map;
+}
+
+/** Extract just the patch-id from a single `git patch-id` line (the first
+ *  whitespace-delimited token), or null if there's no diff (empty input). */
+export function parsePatchId(out: string): string | null {
+  const token = out.trim().split(/\s+/)[0];
+  return token ? token : null;
+}
+
+/**
  * Parse a commit's metadata (`git show -s --format=%H<FS>…%b`) together with
  * its `--name-status -z` file list into a single CommitDetails.
  */
