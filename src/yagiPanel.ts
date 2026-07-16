@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import * as path from "path";
-import { GitService, OperationType } from "./gitService";
+import { GitService, MergedBranch, OperationType } from "./gitService";
 import { openWorkingDiff, openCommitFileDiff, openMergeEditor } from "./diffProvider";
 import { setBranch } from "./statusBar";
 import {
@@ -26,6 +26,15 @@ export class YagiPanel {
   private openedFolder = "";
   private commitLimit = 200; // grows as the user loads more history
   private branchFilter: string[] = []; // graph restricted to these refs (empty = all)
+  private knownBranches = new Set<string>(); // last-seen branch names, for pruning the filter without a re-fetch
+  private currentBranchName = ""; // HEAD's branch name, the squash/rebase-merge target
+  private localBranchNames: string[] = []; // local heads (merge-detection candidates), newest-first
+  // Squash/rebase-merge detection caches. Rebuilt when the target (HEAD) moves;
+  // per-branch results keyed by "name\0tip" so a branch is only re-tested when
+  // its tip changes. See updateMergedBranches().
+  private mergedTargetSha = "";
+  private mergedTargetTips = new Map<string, string>();
+  private mergedCache = new Map<string, MergedBranch | null>();
   private ready = false; // the webview has mounted and can receive messages
   private pendingRebaseBase: string | undefined; // rebase requested before ready
   private debounce: NodeJS.Timeout | undefined;
@@ -107,6 +116,9 @@ export class YagiPanel {
       this.git = new GitService(root);
       this.commitLimit = 200; // reset paging for the new repo
       this.branchFilter = []; // the old repo's branches don't apply here
+      this.mergedTargetSha = ""; // merge-detection caches are per-repo
+      this.mergedTargetTips.clear();
+      this.mergedCache.clear();
       void this.setupGitDirWatcher();
     }
     return true;
@@ -169,7 +181,10 @@ export class YagiPanel {
         case "setBranchFilter":
           this.branchFilter = msg.branches;
           this.commitLimit = 200; // a new scope starts paging over
-          await this.sendState();
+          // A selection change only affects which commits the graph walks —
+          // status/branches/operation/force-push are unchanged — so recompute
+          // just the graph instead of a full (and, on big repos, slow) snapshot.
+          await this.sendGraph();
           break;
         case "saveLayout":
           await this.context.globalState.update(LAYOUT_KEY, msg.layout);
@@ -502,16 +517,23 @@ export class YagiPanel {
       this.post({ type: "notRepo", path: this.openedFolder });
       return;
     }
-    const [status, branches, operation, forcePush] = await Promise.all([
+    const [status, branches, operation] = await Promise.all([
       this.svc.getStatus(),
       this.svc.getBranches(true),
       this.svc.getOperation(),
-      checkNeedsForcePush(this.svc, this.root),
     ]);
+    // Reuse the branch list just fetched instead of a second ref scan — the
+    // force-push check only needs the current branch, which is in it.
+    const forcePush = await checkNeedsForcePush(this.svc, this.root, branches);
     // Prune the graph filter to refs that still exist (a selected branch may
     // have been deleted) — a stale ref would make `git log` fail outright.
     const existing = new Set(branches.map((b) => b.name));
+    this.knownBranches = existing; // remember for sendGraph()'s cheap pruning
     this.branchFilter = this.branchFilter.filter((n) => existing.has(n));
+    // Remember the merge-detection target (HEAD) and candidate pool (local
+    // heads) so sendGraph() can refresh merge lines without re-fetching.
+    this.currentBranchName = branches.find((b) => b.current)?.name ?? "";
+    this.localBranchNames = branches.filter((b) => !b.remote).map((b) => b.name);
     const commits = await this.svc.getLog(this.commitLimit, this.branchFilter);
     if (generation !== this.stateGeneration) return; // superseded — drop it
     setBranch(branches.find((b) => b.current)?.name);
@@ -531,6 +553,110 @@ export class YagiPanel {
       branchLimit,
       branchFilter: this.branchFilter,
     });
+    // Detect squash/rebase merges after the paint (it's the expensive part);
+    // results arrive as a separate "merged" message.
+    void this.updateMergedBranches(generation);
+  }
+
+  /**
+   * Recompute only the commit graph for the current `branchFilter` and push it
+   * to the UI, skipping the full snapshot (status/branches/operation/
+   * force-push) that a selection change can't affect. This is the cheap path
+   * behind branch-filter toggles: on a big repo a full sendState() re-scans
+   * every local+remote ref (twice — see checkNeedsForcePush), which is what
+   * made toggling branches hang. Shares stateGeneration with sendState() so a
+   * concurrent full refresh still wins if it finishes later.
+   */
+  private async sendGraph() {
+    const generation = ++this.stateGeneration;
+    if (!(await this.ensureRepo())) {
+      if (generation !== this.stateGeneration) return;
+      this.post({ type: "notRepo", path: this.openedFolder });
+      return;
+    }
+    // Prune against the last-seen branch set (no re-fetch). If we somehow have
+    // no cached set yet, trust the names the webview sent — they come straight
+    // from the currently-displayed checkboxes.
+    if (this.knownBranches.size) {
+      this.branchFilter = this.branchFilter.filter((n) =>
+        this.knownBranches.has(n)
+      );
+    }
+    const commits = await this.svc.getLog(this.commitLimit, this.branchFilter);
+    if (generation !== this.stateGeneration) return; // superseded — drop it
+    this.post({
+      type: "graph",
+      commits,
+      hasMore: commits.length >= this.commitLimit,
+      branchFilter: this.branchFilter,
+    });
+    // The visible branch set changed, so which merge lines apply changed too.
+    // Cheap here: the target map and per-branch results are cached, so only
+    // newly-selected branches cost a probe.
+    void this.updateMergedBranches(generation);
+  }
+
+  /**
+   * Find which candidate branches were squash/rebase-merged into the current
+   * branch and push them as a "merged" message. Runs off the hot path (after
+   * the graph is already on screen) and leans on two caches so it stays cheap:
+   * the target's patch-id map (rebuilt only when HEAD moves) and per-branch
+   * results (keyed by branch tip). Gated by `yagi.showMergedBranches`.
+   */
+  private async updateMergedBranches(generation: number) {
+    try {
+      const on = vscode.workspace
+        .getConfiguration("yagi")
+        .get<boolean>("showMergedBranches", true);
+      const target = this.currentBranchName;
+      if (!on || !target) {
+        if (generation === this.stateGeneration) {
+          this.post({ type: "merged", mergedBranches: [] });
+        }
+        return;
+      }
+      const targetSha = await this.svc.revParse(target);
+      // Rebuild the target's patch-id map only when HEAD has actually moved.
+      if (targetSha !== this.mergedTargetSha) {
+        this.mergedTargetSha = targetSha;
+        this.mergedTargetTips = await this.svc.firstParentPatchIds(target);
+        this.mergedCache.clear(); // results were keyed to the old target
+      }
+      const results: MergedBranch[] = [];
+      for (const name of this.mergeCandidates()) {
+        if (generation !== this.stateGeneration) return; // superseded mid-scan
+        let tip: string;
+        try {
+          tip = await this.svc.revParse(name);
+        } catch {
+          continue; // branch vanished mid-scan
+        }
+        const key = `${name}\x00${tip}`;
+        let info = this.mergedCache.get(key);
+        if (info === undefined) {
+          // Real ancestors are already drawn by normal graph edges.
+          info = (await this.svc.isAncestor(name, target))
+            ? null
+            : await this.svc.detectMerged(name, target, this.mergedTargetTips);
+          this.mergedCache.set(key, info);
+        }
+        if (info) results.push(info);
+      }
+      if (generation !== this.stateGeneration) return;
+      this.post({ type: "merged", mergedBranches: results });
+    } catch {
+      /* detection is best-effort; never let it break the view */
+    }
+  }
+
+  /** Local, non-current branches currently in graph scope (or all locals when
+   *  unfiltered), capped so detection stays bounded on big repos. */
+  private mergeCandidates(): string[] {
+    const locals = new Set(this.localBranchNames);
+    const scoped = this.branchFilter.length
+      ? this.branchFilter.filter((n) => locals.has(n))
+      : this.localBranchNames;
+    return scoped.filter((n) => n !== this.currentBranchName).slice(0, 50);
   }
 
   private post(message: any) {

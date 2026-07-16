@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { GitService } from "./gitService";
+import type { Branch } from "./types";
 import { clearNeedsForcePush, isPendingForcePush, markNeedsForcePush } from "./forcePushState";
 
 /**
@@ -64,10 +65,14 @@ export async function markRebasedIfDiverged(
  */
 export async function checkNeedsForcePush(
   git: GitService,
-  root: string
+  root: string,
+  // Reuse a branch list the caller already fetched (sendState does) so this
+  // doesn't run a second `for-each-ref` scan. Only the current local branch is
+  // needed, which is present in both the local-only and include-remotes lists.
+  branches?: Branch[]
 ): Promise<{ branch: string; ahead: number; behind: number } | null> {
-  const branches = await git.getBranches();
-  const cur = branches.find((b) => b.current);
+  const list = branches ?? (await git.getBranches());
+  const cur = list.find((b) => b.current);
   if (!cur || !isPendingForcePush(root, cur.name)) {
     return null;
   }

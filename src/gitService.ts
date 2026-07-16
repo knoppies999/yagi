@@ -8,6 +8,7 @@ import {
   CommitDetails,
   CommitFile,
   FileChange,
+  MergedBranch,
   Operation,
   OperationType,
 } from "./types";
@@ -25,6 +26,8 @@ import {
   parseBranches,
   parseCommitDetails,
   parseLog,
+  parsePatchId,
+  parsePatchIds,
   parseRebaseTodo,
   parseStatus,
   parseUnmergedStages,
@@ -36,6 +39,7 @@ export {
   CommitDetails,
   CommitFile,
   FileChange,
+  MergedBranch,
   Operation,
   OperationType,
 };
@@ -191,6 +195,108 @@ export class GitService {
       ...refs,
     ]);
     return parseBranches(out);
+  }
+
+  // ---- squash/rebase-merge detection --------------------------------------
+  // A squash or rebase merge replays a branch's changes onto the target under
+  // new SHAs, so there's no ancestry to draw a merge line from. We recover the
+  // relationship by patch-id: a change's content hashes to the same id no
+  // matter which commit carries it, so a branch whose cumulative diff (squash)
+  // or tip diff (rebase) matches a commit on the target was merged there.
+
+  /** Resolve a ref to its full commit hash (trimmed). */
+  async revParse(ref: string): Promise<string> {
+    return (await this.run(["rev-parse", ref])).trim();
+  }
+
+  /** merge-base of two refs, or null if they share no history. */
+  async mergeBase(a: string, b: string): Promise<string | null> {
+    try {
+      return (await this.run(["merge-base", a, b])).trim() || null;
+    } catch {
+      return null; // unrelated histories
+    }
+  }
+
+  /** True if `ancestor` is reachable from `descendant` (real ancestry). Such a
+   *  branch is already drawn by the normal graph, so it needs no synthetic line. */
+  async isAncestor(ancestor: string, descendant: string): Promise<boolean> {
+    try {
+      await this.run(["merge-base", "--is-ancestor", ancestor, descendant]);
+      return true; // exit 0 = yes
+    } catch {
+      return false; // exit 1 = no (or unrelated) — either way, not ancestry
+    }
+  }
+
+  /**
+   * Patch-id → commit-hash map for the target's first-parent line (its own
+   * mainline, where squash/PR-merge commits land), newest `limit` commits.
+   * Built once per target tip and cached by the caller. `--first-parent`
+   * keeps this bounded and avoids matching commits that only exist on side
+   * branches merged into the target.
+   */
+  async firstParentPatchIds(
+    target: string,
+    limit = 400
+  ): Promise<Map<string, string>> {
+    const diffs = await this.run([
+      "log",
+      "-p",
+      "--first-parent",
+      "--no-color",
+      `--max-count=${limit}`,
+      target,
+    ]);
+    if (!diffs.trim()) return new Map();
+    const ids = await this.run(["patch-id", "--stable"], undefined, diffs);
+    return parsePatchIds(ids);
+  }
+
+  /** Patch-id of the diff between two commits (the change `a`→`b`), or null if
+   *  the diff is empty. Used to hash a branch's cumulative or tip change. */
+  async diffPatchId(a: string, b: string): Promise<string | null> {
+    let diff: string;
+    try {
+      diff = await this.run(["diff", "--no-color", a, b]);
+    } catch {
+      return null; // e.g. `b` has no parent to diff against
+    }
+    if (!diff.trim()) return null;
+    const out = await this.run(["patch-id", "--stable"], undefined, diff);
+    return parsePatchId(out);
+  }
+
+  /**
+   * Decide whether `branch` was squash/rebase-merged into `target`, given the
+   * target's precomputed patch-id map (`firstParentPatchIds`). Returns the
+   * matched merge commit + kind, or null. Assumes the caller already excluded
+   * branches that are real ancestors of the target (those don't need this).
+   */
+  async detectMerged(
+    branch: string,
+    target: string,
+    targetTips: Map<string, string>
+  ): Promise<MergedBranch | null> {
+    const tip = await this.revParse(branch);
+    const base = await this.mergeBase(target, branch);
+    if (!base || base === tip) return null; // unrelated, or nothing unique to branch
+
+    // Squash: the branch's whole change collapsed to one commit on the target.
+    const cumulative = await this.diffPatchId(base, tip);
+    let mergeCommit = cumulative ? targetTips.get(cumulative) : undefined;
+    let kind: MergedBranch["kind"] = "squash";
+
+    // Rebase: commits replayed 1:1 — the tip's own change matches the last
+    // replayed commit. (A single-commit branch is caught by the squash check.)
+    if (!mergeCommit) {
+      const tipChange = await this.diffPatchId(`${tip}^`, tip);
+      mergeCommit = tipChange ? targetTips.get(tipChange) : undefined;
+      kind = "rebase";
+    }
+
+    if (!mergeCommit || mergeCommit === tip) return null;
+    return { branch, tip, into: target, mergeCommit, kind };
   }
 
   stage(path: string) {

@@ -428,6 +428,34 @@ button.danger {
   color: #fff;
   font-weight: 600;
 }
+/* Branch that was squash/rebase-merged into the current branch. */
+.ref-merged {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid #b180d7;
+}
+.ref-merged-badge {
+  background: #b180d7;
+  color: #fff;
+  border-radius: 7px;
+  padding: 0 5px;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+/* Same marker in the branch sidebar list. */
+.branch-merged {
+  margin-left: 6px;
+  background: #b180d7;
+  color: #fff;
+  border-radius: 7px;
+  padding: 0 5px;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  flex: 0 0 auto;
+}
 
 /* ---- commit details ---- */
 .details-host {

@@ -41,6 +41,27 @@ export interface Branch {
   behind: number;
 }
 
+/**
+ * A branch whose work is already present on a target branch (typically the
+ * checked-out one) even though it shares NO commit ancestry with it — the
+ * result of a squash or rebase merge, which replays the changes under new
+ * SHAs. The graph can't draw a real merge line for this (there's no parent
+ * link), so it draws a synthetic one from `mergeCommit` down to `tip`.
+ * Detected via patch-id equivalence; see GitService.detectMerged.
+ */
+export interface MergedBranch {
+  /** The merged branch's local head name (e.g. "feature/x"). */
+  branch: string;
+  /** Its tip commit hash — one end of the synthetic edge. */
+  tip: string;
+  /** The branch it merged into (the target, e.g. "main"). */
+  into: string;
+  /** The squash (or last replayed) commit on the target — the other end. */
+  mergeCommit: string;
+  /** How the work landed: one squashed commit, or commits replayed by rebase. */
+  kind: "squash" | "rebase";
+}
+
 /** A file touched by a single commit. status is git's A/M/D/R/C code. */
 export interface CommitFile {
   status: string;

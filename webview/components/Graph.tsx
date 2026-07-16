@@ -1,10 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { Commit } from "../../src/types";
+import type { Commit, MergedBranch } from "../../src/types";
 import { post } from "../vscodeApi";
 import { assignLanes, LANE_COLORS, ROW_H, COL_W } from "../graph";
 import type { MenuItem } from "./ContextMenu";
 
 const OVERSCAN = 10; // rows rendered above/below the viewport
+
+// Squash/rebase-merge lines get one distinct, solid colour so they read as a
+// deliberate "this branch merged here" marker rather than a normal lane edge.
+const MERGE_EDGE_COLOR = "#b180d7";
 
 // Commit timestamps are absolute (unix seconds); render them in the viewer's
 // local timezone — same basis as the details panel, just without seconds.
@@ -20,6 +24,7 @@ const fmtWhen = (unixSec: number) =>
 export function Graph({
   commits,
   currentBranch,
+  merged,
   selected,
   hasMore,
   loading,
@@ -29,6 +34,7 @@ export function Graph({
 }: {
   commits: Commit[];
   currentBranch: string;
+  merged: MergedBranch[];
   selected?: string;
   hasMore: boolean;
   loading: boolean;
@@ -40,9 +46,14 @@ export function Graph({
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportH, setViewportH] = useState(600);
 
-  const { placed, edges: layoutEdges, maxCol } = useMemo(
+  const { placed, edges: layoutEdges, rowByHash, maxCol } = useMemo(
     () => assignLanes(commits),
     [commits]
+  );
+  // Merged branches indexed by name (for the tip badge) — small list.
+  const mergedByName = useMemo(
+    () => new Map(merged.map((m) => [m.branch, m])),
+    [merged]
   );
   const total = placed.length;
   const graphW = (maxCol + 1) * COL_W + COL_W;
@@ -152,6 +163,37 @@ export function Graph({
     );
   });
 
+  // Synthetic squash/rebase-merge lines: no git ancestry links them, so draw
+  // from the absorbing commit on the target down to the merged branch's tip.
+  // Both endpoints must be loaded rows; skip when the pair is fully offscreen.
+  merged.forEach((m) => {
+    const fromRow = rowByHash.get(m.mergeCommit); // absorbing commit (newer)
+    const toRow = rowByHash.get(m.tip); // branch tip (older)
+    if (fromRow === undefined || toRow === undefined) return;
+    const lo = Math.min(fromRow, toRow);
+    const hi = Math.max(fromRow, toRow);
+    if (hi < start || lo >= end) return;
+    edges.push(
+      <path
+        key={`merged:${m.branch}`}
+        d={edgePath({
+          fromRow,
+          fromCol: placed[fromRow].col,
+          lane: placed[toRow].col,
+          toRow,
+          toCol: placed[toRow].col,
+        })}
+        fill="none"
+        stroke={MERGE_EDGE_COLOR}
+        strokeWidth={2}
+      >
+        <title>
+          {m.branch} {m.kind}-merged into {m.into}
+        </title>
+      </path>
+    );
+  });
+
   // Nodes + rows only for the visible window.
   const nodes: React.ReactNode[] = [];
   const rows: React.ReactNode[] = [];
@@ -180,14 +222,23 @@ export function Graph({
         onClick={() => onSelect(c.hash)}
         onContextMenu={(e) => onMenu(e, menuFor(c))}
       >
-        {c.refs.map((r) => (
-          <span
-            key={r}
-            className={"ref" + (r === currentBranch ? " ref-current" : "")}
-          >
-            {r}
-          </span>
-        ))}
+        {c.refs.map((r) => {
+          const m = mergedByName.get(r);
+          return (
+            <span
+              key={r}
+              className={
+                "ref" +
+                (r === currentBranch ? " ref-current" : "") +
+                (m ? " ref-merged" : "")
+              }
+              title={m ? `${m.kind}-merged into ${m.into}` : undefined}
+            >
+              {r}
+              {m && <span className="ref-merged-badge">merged</span>}
+            </span>
+          );
+        })}
         <span className="subject">{c.subject}</span>
         <span className="meta">
           <span className="commit-date">{fmtWhen(c.date)}</span> · {c.author} ·{" "}

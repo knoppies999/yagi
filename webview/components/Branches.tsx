@@ -7,6 +7,7 @@ export function Branches({
   branches,
   limit,
   selected,
+  mergedNames,
   onSelect,
   onMenu,
   onCollapse,
@@ -16,6 +17,8 @@ export function Branches({
   limit: number;
   /** Branch names the graph is restricted to (empty = show all branches). */
   selected: string[];
+  /** Names detected as squash/rebase-merged into the current branch. */
+  mergedNames: Set<string>;
   /** Replace the graph's branch selection with `names`. */
   onSelect: (names: string[]) => void;
   onMenu: (e: React.MouseEvent, items: MenuItem[]) => void;
@@ -34,12 +37,19 @@ export function Branches({
         : [...selected, name]
     );
 
+  // The checked-out branch pins to the top of the local list, and its upstream
+  // (e.g. "origin/main") to the top of the remote list — the branch you're on
+  // is always the first thing you see in each group.
+  const cur = branches.find((b) => b.current);
+  const currentUpstream = cur?.upstream;
+
   // Branches arrive newest-first (sorted by latest commit date). The cap is
   // applied to the local and remote lists *independently* — otherwise the many
   // recently-updated remote branches would crowd every local branch out of a
-  // single combined window. The current branch and any branches feeding the
-  // graph filter are always kept visible so they stay toggleable.
-  const pinned = (b: Branch) => b.current || selectedSet.has(b.name);
+  // single combined window. The current branch, its upstream, and any branches
+  // feeding the graph filter are always kept visible so they stay toggleable.
+  const pinned = (b: Branch) =>
+    b.current || b.name === currentUpstream || selectedSet.has(b.name);
   const capped = limit > 0 && !showAll;
   const capGroup = (list: Branch[]) => {
     if (!capped) return list;
@@ -48,10 +58,24 @@ export function Branches({
     return [...head, ...extra];
   };
   const match = (b: Branch) => b.name.toLowerCase().includes(q);
+
+  // Move `topName` to the front (after cap/filter, so it's pinned to the very
+  // top of whatever is shown). Absent name / not-present → list unchanged.
+  const floatTop = (list: Branch[], topName?: string) => {
+    if (!topName) return list;
+    const i = list.findIndex((b) => b.name === topName);
+    return i <= 0 ? list : [list[i], ...list.slice(0, i), ...list.slice(i + 1)];
+  };
   const allLocals = branches.filter((b) => !b.remote);
   const allRemotes = branches.filter((b) => b.remote);
-  const locals = q ? allLocals.filter(match) : capGroup(allLocals);
-  const remotes = q ? allRemotes.filter(match) : capGroup(allRemotes);
+  const locals = floatTop(
+    q ? allLocals.filter(match) : capGroup(allLocals),
+    cur?.name
+  );
+  const remotes = floatTop(
+    q ? allRemotes.filter(match) : capGroup(allRemotes),
+    currentUpstream
+  );
   const shown = [...locals, ...remotes];
   const hiddenCount = q ? 0 : Math.max(0, branches.length - shown.length);
   const overCap =
@@ -141,6 +165,14 @@ export function Branches({
       />
       <span className="branch-icon">{b.current ? "●" : "○"}</span>
       <span className="branch-name">{b.name}</span>
+      {mergedNames.has(b.name) && (
+        <span
+          className="branch-merged"
+          title="Squash/rebase-merged into the current branch"
+        >
+          merged
+        </span>
+      )}
       {(b.ahead > 0 || b.behind > 0) && (
         <span className="branch-track">
           ↑{b.ahead} ↓{b.behind}
