@@ -2,6 +2,28 @@
 
 All notable changes to YAGI are documented here.
 
+## 1.1.0
+
+**Squash / rebase-merge detection**
+- YAGI now recognizes branches that were **squash- or rebase-merged** into the
+  current branch even though they share no commit ancestry (their changes were
+  replayed under new SHAs), and draws a solid merge line from the commit that
+  absorbed them to the branch tip, plus a "merged" badge in the graph and the
+  branch list. Detection uses patch-id equivalence and is cached per commit, so
+  it stays cheap. New `yagi.showMergedBranches` setting (default on) turns it
+  off for very large repositories.
+
+**Branch panel**
+- The **checked-out branch is pinned to the top** of the Local list, and its
+  upstream to the top of the Remote list, so the branch you're on is always the
+  first thing you see.
+
+**Performance**
+- Toggling the branch filter now recomputes only the graph instead of a full
+  repository snapshot, so selecting branches stays responsive on large repos.
+- Removed a redundant branch scan from every refresh (the force-push check now
+  reuses the already-fetched branch list).
+
 ## 1.0.0
 
 First stable release.

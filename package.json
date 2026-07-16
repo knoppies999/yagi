@@ -2,7 +2,7 @@
   "name": "yagi-git-interface",
   "displayName": "YAGI — Yet Another Git Interface",
   "description": "A Fork-like graphical Git client inside VS Code: commit graph, staging, merge conflicts, interactive rebase, and remotes.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "publisher": "RuanduPlessis",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -53,6 +53,11 @@
           "default": 25,
           "minimum": 0,
           "description": "Number of most-recently-updated branches to show in the sidebar by default (sorted by latest commit). Older branches stay searchable via the filter box, or via the \"Show all\" toggle. Set to 0 to always show every branch."
+        },
+        "yagi.showMergedBranches": {
+          "type": "boolean",
+          "default": true,
+          "description": "Detect branches that were squash- or rebase-merged into the current branch (their commits share no ancestry) and draw a synthetic merge line to the commit that absorbed them. Uses patch-id comparison; turn off if it's slow on very large repositories."
         }
       }
     },
