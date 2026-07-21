@@ -17,30 +17,72 @@ import { ConflictStage } from "./conflictCache";
 export const FS = "\x1f";
 export const RS = "\x1e";
 
-/** Parse `git log --pretty=format:%H<FS>%P<FS>…<RS>` into commits, newest first. */
-export function parseLog(out: string): Commit[] {
+/** Split a `%H<FS>%P<FS>%an<FS>%ae<FS>%at<FS>%s<FS>%D` record into a Commit. */
+function commitFromFields(fields: string[]): Commit {
+  const [hash, parents, author, email, date, subject, refs] = fields;
+  return {
+    hash,
+    parents: parents ? parents.split(" ").filter(Boolean) : [],
+    author,
+    email,
+    date: parseInt(date, 10),
+    subject,
+    refs: refs
+      ? refs
+          .split(",")
+          .map((r) => r.trim().replace(/^HEAD -> /, ""))
+          .filter(Boolean)
+      : [],
+  };
+}
+
+/** Split RS-delimited `git log` output into its non-empty records. */
+function logRecords(out: string): string[] {
   return out
     .split(RS)
     .map((r) => r.replace(/^\n/, ""))
-    .filter((r) => r.trim().length > 0)
-    .map((record) => {
-      const [hash, parents, author, email, date, subject, refs] =
-        record.split(FS);
-      return {
-        hash,
-        parents: parents ? parents.split(" ").filter(Boolean) : [],
-        author,
-        email,
-        date: parseInt(date, 10),
-        subject,
-        refs: refs
-          ? refs
-              .split(",")
-              .map((r) => r.trim().replace(/^HEAD -> /, ""))
-              .filter(Boolean)
-          : [],
-      };
-    });
+    .filter((r) => r.trim().length > 0);
+}
+
+/** Parse `git log --pretty=format:%H<FS>%P<FS>…<RS>` into commits, newest first. */
+export function parseLog(out: string): Commit[] {
+  return logRecords(out).map((record) => commitFromFields(record.split(FS)));
+}
+
+export interface CompareLogEntry {
+  /**
+   * git's `%m` marker under `--left-right --cherry-mark`:
+   * "<" only on the left branch, ">" only on the right, "=" its patch also
+   * exists on the other side. Note "=" *replaces* the side marker (git checks
+   * PATCHSAME before left/right), which is why the side has to come from a
+   * separate `--left-right` walk — see parseLeftRight.
+   */
+  mark: string;
+  commit: Commit;
+}
+
+/** Parse `git log --left-right --cherry-mark --pretty=format:%m<FS>%H<FS>…<RS>`. */
+export function parseCompareLog(out: string): CompareLogEntry[] {
+  return logRecords(out).map((record) => {
+    const fields = record.split(FS);
+    return { mark: fields[0], commit: commitFromFields(fields.slice(1)) };
+  });
+}
+
+/**
+ * Parse `git rev-list --left-right` ("<sha" / ">sha", one per line) into
+ * hash → which half of the symmetric difference the commit came from.
+ */
+export function parseLeftRight(out: string): Map<string, "left" | "right"> {
+  const sides = new Map<string, "left" | "right">();
+  for (const line of out.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const mark = trimmed[0];
+    if (mark !== "<" && mark !== ">") continue;
+    sides.set(trimmed.slice(1), mark === "<" ? "left" : "right");
+  }
+  return sides;
 }
 
 /**
@@ -117,6 +159,50 @@ export function parseBranches(out: string): Branch[] {
     });
   }
   return branches;
+}
+
+/**
+ * Parse `git for-each-ref --format=%(objectname)<FS>%(refname)<FS>%(refname:short)`
+ * into short branch names, at most one per distinct commit. A local head and
+ * its remote-tracking counterpart usually point at the same commit and would
+ * contribute the same line twice, so the local one wins.
+ */
+export function parseRefsAtDistinctCommits(
+  out: string
+): { name: string; tip: string }[] {
+  const byCommit = new Map<string, { full: string; name: string }>();
+  for (const line of out.split("\n")) {
+    if (!line.trim()) continue;
+    const [tip, full, name] = line.split(FS);
+    if (!tip || !full) continue;
+    if (/^refs\/remotes\/[^/]+\/HEAD$/.test(full)) continue; // alias, not a branch
+    const prev = byCommit.get(tip);
+    const local = full.startsWith("refs/heads/");
+    if (!prev || (local && !prev.full.startsWith("refs/heads/"))) {
+      byCommit.set(tip, { full, name });
+    }
+  }
+  return [...byCommit].map(([tip, r]) => ({ name: r.name, tip }));
+}
+
+/**
+ * Drop merge parents that a `--first-parent` walk deliberately never visited.
+ * Without this every collapsed topic leaves its merge commit with a parent
+ * that isn't loaded, which the layout draws as a line dangling off the bottom
+ * of the graph — one phantom lane per merge, the exact clutter first-parent
+ * scoping exists to remove.
+ *
+ * The FIRST parent is always kept even when missing: there the line really
+ * does continue past the loaded window, and the dangling edge is the "more
+ * history below" cue.
+ */
+export function pruneCollapsedParents(commits: Commit[]): Commit[] {
+  const loaded = new Set(commits.map((c) => c.hash));
+  return commits.map((c) =>
+    c.parents.length > 1
+      ? { ...c, parents: c.parents.filter((p, i) => i === 0 || loaded.has(p)) }
+      : c
+  );
 }
 
 /**

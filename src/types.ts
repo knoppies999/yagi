@@ -62,6 +62,47 @@ export interface MergedBranch {
   kind: "squash" | "rebase";
 }
 
+/**
+ * How one side's commit relates to the *content* of the other branch:
+ * - "unique"     — the change exists only on this side.
+ * - "equivalent" — the same change exists on the other branch under a different
+ *                  SHA: a cherry-pick, a rebase replay, or one topic squashed
+ *                  into each branch separately. git's own patch-id says so.
+ * - "squashed"   — the commit belongs to a topic that was merged normally into
+ *                  this branch but landed on the other one collapsed into a
+ *                  single squash commit, so no per-commit patch-id matches.
+ *
+ * Only "unique" is a real difference between the branches; the other two are
+ * the same work wearing a different hash.
+ */
+export type CompareRelation = "unique" | "equivalent" | "squashed";
+
+export interface CompareCommit extends Commit {
+  relation: CompareRelation;
+  /** The commit on the other branch carrying the same change, when identified. */
+  counterpart?: string;
+}
+
+/**
+ * A comparison of exactly two branches: the commits reachable from one but not
+ * the other (git's `A...B` symmetric difference), with anything whose content
+ * is already on the other side flagged rather than silently dropped. Commits
+ * reachable from *both* — the ordinary "merged one into the other" case — never
+ * appear here at all; the range excludes them by construction.
+ */
+export interface CompareResult {
+  /** Branch on the left of the range (its exclusive commits are `leftCommits`). */
+  left: string;
+  right: string;
+  leftCommits: CompareCommit[];
+  rightCommits: CompareCommit[];
+  /** The walk hit its cap — the lists are incomplete. */
+  truncated: boolean;
+  /** The squash-detection pass has run. False in the first (fast) result, true
+   *  in the refined one that follows; the UI says "checking…" until then. */
+  squashChecked: boolean;
+}
+
 /** A file touched by a single commit. status is git's A/M/D/R/C code. */
 export interface CommitFile {
   status: string;

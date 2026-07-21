@@ -3,6 +3,7 @@ import type {
   Branch,
   Commit,
   CommitDetails as Details,
+  CompareResult,
   FileChange,
   MergedBranch,
   Operation,
@@ -14,6 +15,7 @@ import { ForcePushBanner, ForcePushInfo } from "./components/ForcePushBanner";
 import { Toolbar } from "./components/Toolbar";
 import { Branches } from "./components/Branches";
 import { Graph } from "./components/Graph";
+import { Compare } from "./components/Compare";
 import { Changes } from "./components/Changes";
 import { CommitDetails } from "./components/CommitDetails";
 import { Rail } from "./components/Rail";
@@ -32,6 +34,12 @@ export function App() {
   const [branchLimit, setBranchLimit] = useState(25);
   const [branchFilter, setBranchFilter] = useState<string[]>([]);
   const [merged, setMerged] = useState<MergedBranch[]>([]);
+  const [compareOn, setCompareOn] = useState(false);
+  const [compare, setCompare] = useState<CompareResult | null>(null);
+  const [connectors, setConnectors] = useState<string[]>([]);
+  // Mirrors the host's default; the host echoes the real value with every
+  // graph, so this only governs the first paint.
+  const [connectingOn, setConnectingOn] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [detailsOpen, setDetailsOpen] = useState(true);
 
@@ -64,6 +72,8 @@ export function App() {
           setBranchFilter(msg.branchFilter);
           setLoadingMore(false);
           setForcePush(msg.forcePush);
+          setConnectors(msg.connectors);
+          setConnectingOn(msg.showConnecting);
           break;
         case "graph":
           // Branch-filter change: only the graph moved; leave everything else.
@@ -71,10 +81,17 @@ export function App() {
           setHasMore(msg.hasMore);
           setBranchFilter(msg.branchFilter);
           setLoadingMore(false);
+          setConnectors(msg.connectors);
+          setConnectingOn(msg.showConnecting);
           break;
         case "merged":
           // Squash/rebase-merge lines, delivered a beat after the graph.
           setMerged(msg.mergedBranches);
+          break;
+        case "compare":
+          // Arrives twice: the fast cherry-mark result, then the same result
+          // refined with squash detection. Both just replace what's shown.
+          setCompare(msg.compare);
           break;
         case "commitDetails":
           // Ignore stale responses for a commit no longer selected.
@@ -118,6 +135,24 @@ export function App() {
     }
     setDetailsOpen((open) => !open);
   }, [selected, commits, selectCommit]);
+
+  // Compare mode reads the sidebar's branch selection, so it needs exactly two
+  // branches checked. Selecting a third (or dropping to one) leaves the mode
+  // on but falls back to the graph, rather than making it re-enable each time.
+  const compareReady = branchFilter.length === 2;
+  const toggleCompare = useCallback(() => {
+    const on = !compareOn;
+    setCompareOn(on);
+    post({ type: "setCompare", on });
+  }, [compareOn]);
+
+  // Optimistic: the host echoes the real value back with the next graph, so a
+  // rejected toggle self-corrects rather than sticking.
+  const toggleConnecting = useCallback(() => {
+    const on = !connectingOn;
+    setConnectingOn(on);
+    post({ type: "setConnecting", on });
+  }, [connectingOn]);
 
   const showMenu = useCallback((e: React.MouseEvent, items: MenuItem[]) => {
     e.preventDefault();
@@ -199,19 +234,42 @@ export function App() {
           <Toolbar
             branches={branches}
             detailsOpen={!!selected && detailsOpen}
+            compareOn={compareOn}
+            compareReady={compareReady}
+            connectingOn={connectingOn}
+            connectingReady={branchFilter.length > 1}
             onToggleDetails={toggleDetails}
+            onToggleCompare={toggleCompare}
+            onToggleConnecting={toggleConnecting}
           />
-          <Graph
-            commits={commits}
-            currentBranch={currentBranch}
-            merged={merged}
-            selected={selected}
-            hasMore={hasMore}
-            loading={loadingMore}
-            onSelect={selectCommit}
-            onLoadMore={loadMore}
-            onMenu={showMenu}
-          />
+          {compareOn && !compareReady && (
+            <div className="compare-hint">
+              Compare needs exactly 2 branches — {branchFilter.length} selected.
+              Check two in the sidebar.
+            </div>
+          )}
+          {compareOn && compare ? (
+            <Compare
+              compare={compare}
+              currentBranch={currentBranch}
+              selected={selected}
+              onSelect={selectCommit}
+              onMenu={showMenu}
+            />
+          ) : (
+            <Graph
+              commits={commits}
+              currentBranch={currentBranch}
+              merged={merged}
+              connectors={connectors}
+              selected={selected}
+              hasMore={hasMore}
+              loading={loadingMore}
+              onSelect={selectCommit}
+              onLoadMore={loadMore}
+              onMenu={showMenu}
+            />
+          )}
           {selected && detailsOpen && (
             <>
               {!layout.collapsedDetails && (

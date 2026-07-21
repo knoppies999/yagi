@@ -24,6 +24,34 @@ export interface Edge {
    */
   toRow: number;
   toCol: number;
+  /** Branch this segment belongs to, for the hover tooltip. Undefined when
+   *  nothing names it (see labelling rules on assignLanes). */
+  branch?: string;
+}
+
+/** A commit's own name: its first ref that isn't a tag. parseLog has already
+ *  stripped the "HEAD -> " prefix, so the checked-out branch reads normally. */
+function refLabel(c: Commit): string | undefined {
+  return c.refs.find((r) => !r.startsWith("tag: "));
+}
+
+// A merged topic branch is usually deleted straight afterwards, leaving its
+// commits with no ref at all — but git's default merge messages still name it.
+// Recovering the name from the subject is a heuristic (someone can write any
+// message they like), so it's only ever a fallback for a line that would
+// otherwise be unlabelled.
+const MERGE_SUBJECTS = [
+  /^Merge remote-tracking branch '([^']+)'/,
+  /^Merge branch '([^']+)'/,
+  /^Merge pull request #\d+ from (\S+)/,
+];
+
+function mergedTopicName(subject: string): string | undefined {
+  for (const re of MERGE_SUBJECTS) {
+    const m = re.exec(subject);
+    if (m) return m[1];
+  }
+  return undefined;
 }
 
 export interface Layout {
@@ -43,6 +71,17 @@ export interface Layout {
  *
  * Edges are resolved in a second pass so each one ends at the column its
  * parent was actually placed in, which the child can't know at claim time.
+ *
+ * Each edge also gets a `branch` for its hover tooltip. A commit sits on every
+ * branch that can reach it, so "the" branch of a line segment is a convention,
+ * not a fact. The rule here is **the nearest branch tip at or above it**: a
+ * commit carrying a ref names the line leaving it, and a commit without one
+ * keeps the name handed down by the newest commit that reached it. So the
+ * segments above `main`'s badge belong to whatever is ahead of main, and the
+ * ones below it read as `main` — which is what the eye expects when tracing a
+ * line past a label. Second parents instead start the merged-in topic's line,
+ * named by that branch's own ref when it still exists and by what the merge
+ * commit called it when it doesn't.
  */
 export function assignLanes(commits: Commit[]): Layout {
   const lanes: (string | null)[] = [];
@@ -55,7 +94,16 @@ export function assignLanes(commits: Commit[]): Layout {
     return i === -1 ? lanes.length : i;
   };
 
-  const pending: { fromRow: number; fromCol: number; lane: number; parent: string }[] = [];
+  // hash -> branch owning the line that arrives at it. First writer wins.
+  const labelByHash = new Map<string, string>();
+
+  const pending: {
+    fromRow: number;
+    fromCol: number;
+    lane: number;
+    parent: string;
+    branch?: string;
+  }[] = [];
 
   for (let row = 0; row < commits.length; row++) {
     const c = commits[row];
@@ -69,6 +117,12 @@ export function assignLanes(commits: Commit[]): Layout {
     }
     if (col === -1) col = firstFree();
 
+    // A ref on this commit renames the line from here down; without one the
+    // line keeps whatever name reached it from above.
+    const ownRef = refLabel(c);
+    if (ownRef) labelByHash.set(c.hash, ownRef);
+    const label = labelByHash.get(c.hash);
+
     c.parents.forEach((p, i) => {
       let lane: number;
       if (i === 0) {
@@ -78,7 +132,24 @@ export function assignLanes(commits: Commit[]): Layout {
         lane = existing !== -1 ? existing : firstFree();
       }
       lanes[lane] = p;
-      pending.push({ fromRow: row, fromCol: col, lane, parent: p });
+      if (!labelByHash.has(p)) {
+        // First parent continues this line; the rest start the merged-in
+        // topic's line, which is named by the parent itself when it still has
+        // a ref, and otherwise by what the merge commit called it.
+        const parentRow = rowByHash.get(p);
+        const parentRef =
+          parentRow === undefined ? undefined : refLabel(commits[parentRow]);
+        const inherited =
+          i === 0 ? label : parentRef ?? mergedTopicName(c.subject);
+        if (inherited) labelByHash.set(p, inherited);
+      }
+      pending.push({
+        fromRow: row,
+        fromCol: col,
+        lane,
+        parent: p,
+        branch: labelByHash.get(p),
+      });
     });
 
     placed.push({ commit: c, col });
@@ -87,8 +158,8 @@ export function assignLanes(commits: Commit[]): Layout {
   const edges: Edge[] = pending.map((e) => {
     const toRow = rowByHash.get(e.parent);
     return toRow === undefined
-      ? { fromRow: e.fromRow, fromCol: e.fromCol, lane: e.lane, toRow: commits.length, toCol: e.lane }
-      : { fromRow: e.fromRow, fromCol: e.fromCol, lane: e.lane, toRow, toCol: placed[toRow].col };
+      ? { fromRow: e.fromRow, fromCol: e.fromCol, lane: e.lane, toRow: commits.length, toCol: e.lane, branch: e.branch }
+      : { fromRow: e.fromRow, fromCol: e.fromCol, lane: e.lane, toRow, toCol: placed[toRow].col, branch: e.branch };
   });
 
   let maxCol = 0;

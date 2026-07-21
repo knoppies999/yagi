@@ -2,6 +2,34 @@
 
 All notable changes to YAGI are documented here.
 
+## 1.2.0
+
+**Compare two branches**
+- Check exactly two branches in the sidebar and hit **⇄ Compare** for a
+  two-column view of what actually differs between them. Commits whose *code*
+  already exists on the other side are folded away rather than listed twice:
+  cherry-picks, rebase replays, and a topic squashed into each branch
+  separately are all detected by patch-id, and a topic that was merged normally
+  into one branch but **squash-merged** into the other is matched by hashing the
+  whole topic range against the other branch's first-parent history. Shared
+  commits are shown dimmed with an `=` marker (and a "Hide shared" toggle), so
+  you can see the detection worked instead of wondering where a commit went.
+
+**Branch-scoped graphs**
+- Selecting branches in the sidebar now collapses the graph to **those
+  branches' own lines**. Anything merged into a selected branch folds into its
+  merge commit, instead of dragging in a separate lane for every topic branch
+  ever merged. The unfiltered view is unchanged.
+- New **⑂ Linking** toolbar toggle (off by default): when a selected branch only
+  reaches another one *through* a branch you didn't select, that intermediate is
+  pulled in and drawn dimmed so the connection is visible.
+
+**Graph**
+- **Hover any line in the graph to see which branch it belongs to.** Lines are
+  named by the nearest branch tip at or above them; a merged-in topic keeps its
+  own name, falling back to the merge commit's message when the branch has since
+  been deleted.
+
 ## 1.1.0
 
 **Squash / rebase-merge detection**

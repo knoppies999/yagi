@@ -2,6 +2,7 @@ import type {
   Branch,
   Commit,
   CommitDetails,
+  CompareResult,
   FileChange,
   MergedBranch,
   Operation,
@@ -39,6 +40,8 @@ export type OutMsg =
   | { type: "saveLayout"; layout: Layout }
   | { type: "loadMore" }
   | { type: "setBranchFilter"; branches: string[] }
+  | { type: "setCompare"; on: boolean }
+  | { type: "setConnecting"; on: boolean }
   | { type: "resolveConflicts"; paths: string[]; resolution: "ours" | "theirs" }
   | { type: "undoMerge" }
   | { type: "undoResolution"; path: string }
@@ -76,6 +79,10 @@ export type InMsg =
        *  branches). Pruned to refs that still exist, so it's authoritative
        *  for the sidebar's selection checkboxes. */
       branchFilter: string[];
+      /** Commits belonging to unselected branches, included only to show how
+       *  two selected branches reach each other. Drawn dimmed. */
+      connectors: string[];
+      showConnecting: boolean;
     }
   | {
       // Lightweight graph-only update for a branch-filter change: only the
@@ -86,6 +93,8 @@ export type InMsg =
       commits: Commit[];
       hasMore: boolean;
       branchFilter: string[];
+      connectors: string[];
+      showConnecting: boolean;
     }
   | {
       // Squash/rebase-merged branches detected out-of-band and sent AFTER the
@@ -93,6 +102,14 @@ export type InMsg =
       // without delaying the paint. Keyed to the branches currently in scope.
       type: "merged";
       mergedBranches: MergedBranch[];
+    }
+  | {
+      // Two-branch comparison, sent whenever compare mode is on and exactly
+      // two branches are selected. Arrives twice per refresh: first with
+      // squashChecked=false (the fast cherry-mark result), then again once the
+      // squash pass has run. null means compare mode is off or inapplicable.
+      type: "compare";
+      compare: CompareResult | null;
     }
   | { type: "commitDetails"; details: CommitDetails }
   | { type: "rebaseTodo"; base: string; entries: RebaseEntry[] }

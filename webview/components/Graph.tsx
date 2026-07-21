@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Commit, MergedBranch } from "../../src/types";
-import { post } from "../vscodeApi";
 import { assignLanes, LANE_COLORS, ROW_H, COL_W } from "../graph";
+import { commitMenuItems, fmtWhen } from "../commitMenu";
 import type { MenuItem } from "./ContextMenu";
 
 const OVERSCAN = 10; // rows rendered above/below the viewport
@@ -10,21 +10,15 @@ const OVERSCAN = 10; // rows rendered above/below the viewport
 // deliberate "this branch merged here" marker rather than a normal lane edge.
 const MERGE_EDGE_COLOR = "#b180d7";
 
-// Commit timestamps are absolute (unix seconds); render them in the viewer's
-// local timezone — same basis as the details panel, just without seconds.
-const fmtWhen = (unixSec: number) =>
-  new Date(unixSec * 1000).toLocaleString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+// Hover target width for graph lines. Wider than COL_W would make neighbouring
+// lanes fight over the pointer, so it stays just under it.
+const EDGE_HOVER_W = 12;
 
 export function Graph({
   commits,
   currentBranch,
   merged,
+  connectors,
   selected,
   hasMore,
   loading,
@@ -35,6 +29,9 @@ export function Graph({
   commits: Commit[];
   currentBranch: string;
   merged: MergedBranch[];
+  /** Commits from unselected branches, present only to link two selected
+   *  branches together. Dimmed so they read as context, not selection. */
+  connectors: string[];
   selected?: string;
   hasMore: boolean;
   loading: boolean;
@@ -55,6 +52,11 @@ export function Graph({
     () => new Map(merged.map((m) => [m.branch, m])),
     [merged]
   );
+  const connectorSet = useMemo(() => new Set(connectors), [connectors]);
+  // An edge is part of a connecting line when either end is — the segment
+  // leaving a selected branch into a connector belongs to the detour too.
+  const isConnectorRow = (row: number) =>
+    row >= 0 && row < placed.length && connectorSet.has(placed[row].commit.hash);
   const total = placed.length;
   const graphW = (maxCol + 1) * COL_W + COL_W;
   const totalH = total * ROW_H;
@@ -89,44 +91,7 @@ export function Graph({
     }
   };
 
-  const menuFor = (c: Commit): MenuItem[] => {
-    const isMerge = c.parents.length > 1;
-    const isBranchTip = c.refs.includes(currentBranch);
-    return [
-    {
-      label: "Cherry-pick onto current branch",
-      onClick: () => post({ type: "cherryPick", hash: c.hash }),
-    },
-    { label: "Revert commit", onClick: () => post({ type: "revert", hash: c.hash }) },
-    ...(isMerge && isBranchTip
-      ? [
-          {
-            label: "Undo This Merge (reset to before it)",
-            danger: true,
-            onClick: () => post({ type: "undoMerge" }),
-          } satisfies MenuItem,
-        ]
-      : []),
-    {
-      label: "Rebase interactively from here…",
-      onClick: () => post({ type: "requestRebase", base: c.hash }),
-    },
-    { separator: true },
-    {
-      label: "Create branch here…",
-      onClick: () => post({ type: "createBranch", startPoint: c.hash }),
-    },
-    {
-      label: `Reset ${currentBranch || "HEAD"} here (mixed)`,
-      onClick: () => post({ type: "reset", hash: c.hash, mode: "mixed" }),
-    },
-    {
-      label: `Reset ${currentBranch || "HEAD"} here (hard)`,
-      danger: true,
-      onClick: () => post({ type: "reset", hash: c.hash, mode: "hard" }),
-    },
-    ];
-  };
+  const menuFor = (c: Commit): MenuItem[] => commitMenuItems(c, currentBranch);
 
   // Child node → bend into the travel lane → vertical run → bend into the
   // parent node's actual column.
@@ -150,17 +115,40 @@ export function Graph({
   // Edges are windowed by their whole span, not their endpoints — a
   // long-running branch must keep its line while both ends are offscreen.
   const edges: React.ReactNode[] = [];
+  // Invisible, much wider copies of each labelled edge, carrying the tooltip.
+  // A 2px line is near-impossible to hover deliberately; these give it a
+  // realistic target without changing what's drawn. Rendered after the visible
+  // paths so they sit on top and actually receive the pointer.
+  const hitAreas: React.ReactNode[] = [];
   layoutEdges.forEach((e, i) => {
     if (e.toRow < start || e.fromRow >= end) return;
+    const d = edgePath(e);
+    const dim = isConnectorRow(e.fromRow) || isConnectorRow(e.toRow);
     edges.push(
       <path
         key={i}
-        d={edgePath(e)}
+        d={d}
         fill="none"
         stroke={LANE_COLORS[e.lane % LANE_COLORS.length]}
-        strokeWidth={2}
+        strokeWidth={dim ? 1.5 : 2}
+        strokeDasharray={dim ? "3 3" : undefined}
+        opacity={dim ? 0.45 : 1}
       />
     );
+    if (e.branch) {
+      hitAreas.push(
+        <path
+          key={`hit:${i}`}
+          d={d}
+          fill="none"
+          stroke="transparent"
+          strokeWidth={EDGE_HOVER_W}
+          pointerEvents="stroke"
+        >
+          <title>{e.branch}</title>
+        </path>
+      );
+    }
   });
 
   // Synthetic squash/rebase-merge lines: no git ancestry links them, so draw
@@ -201,23 +189,34 @@ export function Graph({
   for (let row = start; row < end; row++) {
     const p = placed[row];
     const c = p.commit;
+    const dim = connectorSet.has(c.hash);
 
     nodes.push(
       <circle
         key={c.hash}
         cx={x(p.col)}
         cy={y(row)}
-        r={4}
+        r={dim ? 3 : 4}
         fill={LANE_COLORS[p.col % LANE_COLORS.length]}
         stroke="var(--vscode-editor-background)"
         strokeWidth={1.5}
+        opacity={dim ? 0.45 : 1}
       />
     );
 
     rows.push(
       <div
         key={c.hash}
-        className={"commit-row" + (selected === c.hash ? " selected" : "")}
+        className={
+          "commit-row" +
+          (selected === c.hash ? " selected" : "") +
+          (dim ? " connector" : "")
+        }
+        title={
+          dim
+            ? "On a branch you didn't select — shown to link two selected branches"
+            : undefined
+        }
         style={{ position: "absolute", top: row * ROW_H, left: graphW, right: 0, height: ROW_H }}
         onClick={() => onSelect(c.hash)}
         onContextMenu={(e) => onMenu(e, menuFor(c))}
@@ -254,6 +253,7 @@ export function Graph({
         <svg className="graph-svg" width={graphW} height={totalH}>
           {edges}
           {nodes}
+          {hitAreas}
         </svg>
         {rows}
       </div>
