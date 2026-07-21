@@ -1,6 +1,13 @@
 import * as vscode from "vscode";
 import * as path from "path";
-import { GitService, MergedBranch, OperationType } from "./gitService";
+import {
+  Commit,
+  CompareCommit,
+  CompareResult,
+  GitService,
+  MergedBranch,
+  OperationType,
+} from "./gitService";
 import { openWorkingDiff, openCommitFileDiff, openMergeEditor } from "./diffProvider";
 import { setBranch } from "./statusBar";
 import {
@@ -35,6 +42,21 @@ export class YagiPanel {
   private mergedTargetSha = "";
   private mergedTargetTips = new Map<string, string>();
   private mergedCache = new Map<string, MergedBranch | null>();
+  // Compare mode: on + exactly two selected branches = the two-column diff of
+  // unique commits. patchIdCache holds first-parent patch-id maps keyed by the
+  // branch tip they were built from, so re-running a comparison after an
+  // unrelated refresh doesn't re-diff hundreds of commits.
+  private compareOn = false;
+  private patchIdCache = new Map<string, Map<string, string>>();
+  // Branch-scoped graphs collapse to each selected branch's own line. When a
+  // selected branch only reaches another one through an unselected branch,
+  // that intermediate can be pulled in too (dimmed) so the connection is
+  // visible. Off by default: a scoped graph is meant to show what you picked
+  // and nothing else, and resolving intermediates costs a git call per selected
+  // pair. Opt in via the toolbar; results are cached by selection + tips.
+  private showConnecting = false;
+  private connectingCache = new Map<string, string[]>();
+  private branchSignature = ""; // known branch names; changing invalidates above
   private ready = false; // the webview has mounted and can receive messages
   private pendingRebaseBase: string | undefined; // rebase requested before ready
   private debounce: NodeJS.Timeout | undefined;
@@ -119,6 +141,9 @@ export class YagiPanel {
       this.mergedTargetSha = ""; // merge-detection caches are per-repo
       this.mergedTargetTips.clear();
       this.mergedCache.clear();
+      this.patchIdCache.clear();
+      this.connectingCache.clear();
+      this.branchSignature = "";
       void this.setupGitDirWatcher();
     }
     return true;
@@ -185,6 +210,18 @@ export class YagiPanel {
           // status/branches/operation/force-push are unchanged — so recompute
           // just the graph instead of a full (and, on big repos, slow) snapshot.
           await this.sendGraph();
+          break;
+        case "setConnecting":
+          this.showConnecting = msg.on;
+          // Changes which refs the walk covers, so the graph has to be redone —
+          // but nothing about the repo moved, so the cheap path is enough.
+          await this.sendGraph();
+          break;
+        case "setCompare":
+          this.compareOn = msg.on;
+          // Toggling compare doesn't change the repo or the commit walk, only
+          // which view reads it — so recompute just the comparison.
+          await this.updateCompare(this.stateGeneration);
           break;
         case "saveLayout":
           await this.context.globalState.update(LAYOUT_KEY, msg.layout);
@@ -530,11 +567,18 @@ export class YagiPanel {
     const existing = new Set(branches.map((b) => b.name));
     this.knownBranches = existing; // remember for sendGraph()'s cheap pruning
     this.branchFilter = this.branchFilter.filter((n) => existing.has(n));
+    // A branch appearing or disappearing can change what sits between two
+    // selected ones, and the connecting cache is keyed only on the selection.
+    const signature = [...existing].sort().join("\n");
+    if (signature !== this.branchSignature) {
+      this.branchSignature = signature;
+      this.connectingCache.clear();
+    }
     // Remember the merge-detection target (HEAD) and candidate pool (local
     // heads) so sendGraph() can refresh merge lines without re-fetching.
     this.currentBranchName = branches.find((b) => b.current)?.name ?? "";
     this.localBranchNames = branches.filter((b) => !b.remote).map((b) => b.name);
-    const commits = await this.svc.getLog(this.commitLimit, this.branchFilter);
+    const { commits, connectors } = await this.walkCommits();
     if (generation !== this.stateGeneration) return; // superseded — drop it
     setBranch(branches.find((b) => b.current)?.name);
     // If we filled the limit, there are (probably) older commits to load.
@@ -552,10 +596,14 @@ export class YagiPanel {
       forcePush,
       branchLimit,
       branchFilter: this.branchFilter,
+      connectors,
+      showConnecting: this.showConnecting,
     });
     // Detect squash/rebase merges after the paint (it's the expensive part);
     // results arrive as a separate "merged" message.
     void this.updateMergedBranches(generation);
+    // Repo state moved, so the comparison (if any) is stale too.
+    void this.updateCompare(generation);
   }
 
   /**
@@ -582,18 +630,23 @@ export class YagiPanel {
         this.knownBranches.has(n)
       );
     }
-    const commits = await this.svc.getLog(this.commitLimit, this.branchFilter);
+    const { commits, connectors } = await this.walkCommits();
     if (generation !== this.stateGeneration) return; // superseded — drop it
     this.post({
       type: "graph",
       commits,
       hasMore: commits.length >= this.commitLimit,
       branchFilter: this.branchFilter,
+      connectors,
+      showConnecting: this.showConnecting,
     });
     // The visible branch set changed, so which merge lines apply changed too.
     // Cheap here: the target map and per-branch results are cached, so only
     // newly-selected branches cost a probe.
     void this.updateMergedBranches(generation);
+    // The selection *is* the comparison's input — recompute (or clear it, if
+    // the selection is no longer exactly two branches).
+    void this.updateCompare(generation);
   }
 
   /**
@@ -647,6 +700,218 @@ export class YagiPanel {
     } catch {
       /* detection is best-effort; never let it break the view */
     }
+  }
+
+  // Beyond this many selected branches the connecting scan (a git call per
+  // ordered pair) stops paying for itself — and with that much selected you're
+  // already seeing most of the graph anyway.
+  private static readonly CONNECTING_MAX_BRANCHES = 6;
+
+  /**
+   * Walk the commits for the current selection.
+   *
+   * Unfiltered, this is the whole repo (`--all`) exactly as before. With
+   * branches selected it switches to a first-parent walk, so each selected
+   * branch draws as its own single line and everything merged into it
+   * collapses into the merge commit — rather than dragging in a lane for every
+   * topic branch ever merged.
+   *
+   * Returns the connecting commits separately so the UI can dim them: they
+   * come from branches the user did NOT select, pulled in only to show how two
+   * selected branches actually reach each other.
+   */
+  private async walkCommits(): Promise<{
+    commits: Commit[];
+    connectors: string[];
+  }> {
+    const selected = this.branchFilter;
+    if (!selected.length) {
+      return { commits: await this.svc.getLog(this.commitLimit), connectors: [] };
+    }
+    const intermediates = this.showConnecting
+      ? await this.connectingBranches(selected)
+      : [];
+    const commits = await this.svc.getLog(
+      this.commitLimit,
+      [...selected, ...intermediates],
+      true
+    );
+    if (!intermediates.length) return { commits, connectors: [] };
+    // Anything the walk turned up that isn't on a selected branch's own line
+    // is there purely to connect them.
+    const own = await this.svc.firstParentHashes(selected, this.commitLimit);
+    return {
+      commits,
+      connectors: commits.map((c) => c.hash).filter((h) => !own.has(h)),
+    };
+  }
+
+  /**
+   * Unselected branches that a selected branch has to travel through to reach
+   * another selected one. Cached against the selection and its tips, since the
+   * scan costs a git call per ordered pair and selections get toggled a lot.
+   */
+  private async connectingBranches(selected: string[]): Promise<string[]> {
+    if (selected.length < 2) return []; // nothing to connect
+    if (selected.length > YagiPanel.CONNECTING_MAX_BRANCHES) return [];
+
+    const tips = new Map<string, string>();
+    for (const name of selected) {
+      try {
+        tips.set(name, await this.svc.revParse(name));
+      } catch {
+        return []; // a selected ref vanished; skip rather than guess
+      }
+    }
+    const key = selected
+      .map((n) => `${n}\x00${tips.get(n)}`)
+      .sort()
+      .join("\x1e");
+    const hit = this.connectingCache.get(key);
+    if (hit) return hit;
+
+    const chosen = new Set<string>();
+    const selectedNames = new Set(selected);
+    const selectedTips = new Set(tips.values());
+    for (const from of selected) {
+      for (const to of selected) {
+        if (from === to) continue;
+        for (const b of await this.svc.branchesBetween(from, to)) {
+          // The query legitimately returns the endpoints themselves, and any
+          // remote-tracking twin of a selected branch — neither is an
+          // intermediate, and drawing them would duplicate a line already
+          // there.
+          if (selectedNames.has(b.name) || selectedTips.has(b.tip)) continue;
+          chosen.add(b.name);
+        }
+      }
+    }
+    const result = [...chosen];
+    if (this.connectingCache.size >= 16) {
+      this.connectingCache.delete(
+        this.connectingCache.keys().next().value as string
+      );
+    }
+    this.connectingCache.set(key, result);
+    return result;
+  }
+
+  /**
+   * Recompute the two-branch comparison and push it to the UI. Sends twice on
+   * purpose: the cherry-mark result goes out as soon as it's ready (that's the
+   * fast part), then the squash pass — which has to diff whole topic ranges —
+   * refines it. The UI shows the first result immediately and upgrades in
+   * place, so a slow squash scan never holds up the columns.
+   *
+   * Compare needs exactly two branches; any other selection posts null and the
+   * UI falls back to the graph.
+   */
+  private async updateCompare(generation: number) {
+    try {
+      if (!this.compareOn || this.branchFilter.length !== 2) {
+        if (generation === this.stateGeneration) {
+          this.post({ type: "compare", compare: null });
+        }
+        return;
+      }
+      const [left, right] = this.branchFilter;
+      const base = await this.svc.compareBranches(left, right);
+      if (generation !== this.stateGeneration) return; // superseded
+      const result: CompareResult = { ...base, squashChecked: false };
+      this.post({ type: "compare", compare: result });
+
+      // The squash pass only pays off when a side has unique merge commits —
+      // a merge is the only thing that can hide a whole topic behind one
+      // commit. Without any, the fast result is already final.
+      const hasMerges = (commits: CompareCommit[]) =>
+        commits.some((c) => c.relation === "unique" && c.parents.length > 1);
+      if (!hasMerges(result.leftCommits) && !hasMerges(result.rightCommits)) {
+        this.post({
+          type: "compare",
+          compare: { ...result, squashChecked: true },
+        });
+        return;
+      }
+
+      const [leftIds, rightIds] = await Promise.all([
+        this.firstParentPatchIdsCached(left),
+        this.firstParentPatchIdsCached(right),
+      ]);
+      if (generation !== this.stateGeneration) return;
+      // Each side's topics are looked up in the *other* branch's patch-ids.
+      const [leftSquashed, rightSquashed] = await Promise.all([
+        this.svc.findSquashedTopics(result.leftCommits, rightIds),
+        this.svc.findSquashedTopics(result.rightCommits, leftIds),
+      ]);
+      if (generation !== this.stateGeneration) return;
+
+      // Each match is a fact about *both* sides, so it has to be applied in
+      // both directions. Scanning main's merge finds "the squash commit on
+      // side absorbed this topic" — which also makes that squash commit
+      // shared, even though side has no merge commit of its own to find it
+      // from. Without this the same work reads as shared on one side and
+      // unique on the other.
+      const invert = (found: Map<string, string>) => {
+        const back = new Map<string, string>();
+        for (const [hash, counterpart] of found) {
+          // First writer wins: findSquashedTopics records the merge commit
+          // before the topic's commits, and the merge is the better pointer.
+          if (!back.has(counterpart)) back.set(counterpart, hash);
+        }
+        return back;
+      };
+      const apply = (
+        commits: CompareCommit[],
+        found: Map<string, string>,
+        fromOther: Map<string, string>
+      ) =>
+        commits.map((c) => {
+          const counterpart = found.get(c.hash) ?? fromOther.get(c.hash);
+          return counterpart && c.relation === "unique"
+            ? { ...c, relation: "squashed" as const, counterpart }
+            : c;
+        });
+      this.post({
+        type: "compare",
+        compare: {
+          ...result,
+          leftCommits: apply(
+            result.leftCommits,
+            leftSquashed,
+            invert(rightSquashed)
+          ),
+          rightCommits: apply(
+            result.rightCommits,
+            rightSquashed,
+            invert(leftSquashed)
+          ),
+          squashChecked: true,
+        },
+      });
+    } catch {
+      // Comparison is best-effort (a ref can vanish mid-scan); never let it
+      // take down the view — just drop back to the graph.
+      if (generation === this.stateGeneration) {
+        this.post({ type: "compare", compare: null });
+      }
+    }
+  }
+
+  /** A branch's first-parent patch-id map, cached by the tip it was built
+   *  from. Bounded to a handful of entries — comparisons revisit the same two
+   *  branches repeatedly, but old tips are dead weight once a branch moves. */
+  private async firstParentPatchIdsCached(
+    branch: string
+  ): Promise<Map<string, string>> {
+    const sha = await this.svc.revParse(branch);
+    const hit = this.patchIdCache.get(sha);
+    if (hit) return hit;
+    const ids = await this.svc.firstParentPatchIds(branch);
+    if (this.patchIdCache.size >= 4) {
+      this.patchIdCache.delete(this.patchIdCache.keys().next().value as string);
+    }
+    this.patchIdCache.set(sha, ids);
+    return ids;
   }
 
   /** Local, non-current branches currently in graph scope (or all locals when

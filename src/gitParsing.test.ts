@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   FS,
   RS,
+  parseCompareLog,
+  parseLeftRight,
   parseLog,
   parseStatus,
   parseUnmergedStages,
@@ -10,8 +12,11 @@ import {
   parseRebaseTodo,
   parsePatchId,
   parsePatchIds,
+  parseRefsAtDistinctCommits,
+  pruneCollapsedParents,
   detectOperationType,
 } from "./gitParsing";
+import type { Commit } from "./types";
 
 // Build fixtures from the real separators, exactly as git emits them, rather
 // than sprinkling literal escapes through each assertion.
@@ -52,6 +57,148 @@ describe("parseLog", () => {
       ["m", "p1 p2", "Jane", "jane@x.com", "1700000300", "merge", ""],
     ]);
     expect(parseLog(out)[0].parents).toEqual(["p1", "p2"]);
+  });
+});
+
+describe("parseCompareLog", () => {
+  it("returns [] for empty output", () => {
+    expect(parseCompareLog("")).toEqual([]);
+  });
+
+  it("splits the %m marker off the commit fields", () => {
+    const out = logOutput([
+      ["<", "a1", "a0", "Jane", "jane@x.com", "1700000200", "left work", ""],
+      [">", "b1", "b0", "Bob", "bob@x.com", "1700000100", "right work", ""],
+    ]);
+    const entries = parseCompareLog(out);
+    expect(entries.map((e) => e.mark)).toEqual(["<", ">"]);
+    expect(entries[0].commit).toEqual({
+      hash: "a1",
+      parents: ["a0"],
+      author: "Jane",
+      email: "jane@x.com",
+      date: 1700000200,
+      subject: "left work",
+      refs: [],
+    });
+  });
+
+  it("carries the '=' patch-equal marker through", () => {
+    // --cherry-mark replaces the side marker with '=' for a commit whose patch
+    // exists on both branches (a cherry-pick, rebase replay, or dual squash).
+    const out = logOutput([
+      ["=", "c1", "c0", "Jane", "jane@x.com", "1700000300", "picked", ""],
+    ]);
+    expect(parseCompareLog(out)[0].mark).toBe("=");
+  });
+});
+
+describe("parseRefsAtDistinctCommits", () => {
+  const line = (tip: string, full: string, short: string) =>
+    [tip, full, short].join(FS);
+
+  it("prefers the local head when a remote twin points at the same commit", () => {
+    // origin/feature and feature are the same line; drawing both would double
+    // it. The local name is the one the user acts on.
+    const out = [
+      line("aaa", "refs/remotes/origin/feature", "origin/feature"),
+      line("aaa", "refs/heads/feature", "feature"),
+    ].join("\n");
+    expect(parseRefsAtDistinctCommits(out)).toEqual([
+      { name: "feature", tip: "aaa" },
+    ]);
+  });
+
+  it("keeps a remote-only branch when there's no local twin", () => {
+    const out = line("bbb", "refs/remotes/origin/topic", "origin/topic");
+    expect(parseRefsAtDistinctCommits(out)).toEqual([
+      { name: "origin/topic", tip: "bbb" },
+    ]);
+  });
+
+  it("keeps branches that sit at different commits", () => {
+    const out = [
+      line("aaa", "refs/heads/one", "one"),
+      line("bbb", "refs/heads/two", "two"),
+    ].join("\n");
+    expect(parseRefsAtDistinctCommits(out).map((r) => r.name)).toEqual([
+      "one",
+      "two",
+    ]);
+  });
+
+  it("drops the refs/remotes/<remote>/HEAD alias", () => {
+    const out = line("ccc", "refs/remotes/origin/HEAD", "origin/HEAD");
+    expect(parseRefsAtDistinctCommits(out)).toEqual([]);
+  });
+
+  it("returns [] for empty output", () => {
+    expect(parseRefsAtDistinctCommits("")).toEqual([]);
+  });
+});
+
+describe("pruneCollapsedParents", () => {
+  const commit = (hash: string, parents: string[]): Commit => ({
+    hash,
+    parents,
+    author: "a",
+    email: "e@x.com",
+    date: 0,
+    subject: hash,
+    refs: [],
+  });
+
+  it("drops a merge's unloaded second parent", () => {
+    // The collapsed topic: --first-parent never walked it, so the reference
+    // would draw as a lane dangling off the bottom.
+    const out = pruneCollapsedParents([
+      commit("m", ["a", "topic"]),
+      commit("a", []),
+    ]);
+    expect(out[0].parents).toEqual(["a"]);
+  });
+
+  it("keeps a second parent that IS loaded", () => {
+    // Both branches selected — the merge between them must still draw.
+    const out = pruneCollapsedParents([
+      commit("m", ["a", "b"]),
+      commit("a", []),
+      commit("b", []),
+    ]);
+    expect(out[0].parents).toEqual(["a", "b"]);
+  });
+
+  it("keeps an unloaded FIRST parent as the more-history cue", () => {
+    const out = pruneCollapsedParents([commit("tip", ["older"])]);
+    expect(out[0].parents).toEqual(["older"]);
+  });
+
+  it("keeps an unloaded first parent even on a merge commit", () => {
+    // Oldest loaded row happens to be a merge: its line still continues down.
+    const out = pruneCollapsedParents([commit("m", ["older", "topic"])]);
+    expect(out[0].parents).toEqual(["older"]);
+  });
+
+  it("leaves ordinary commits untouched", () => {
+    const input = [commit("b", ["a"]), commit("a", [])];
+    expect(pruneCollapsedParents(input)).toEqual(input);
+  });
+});
+
+describe("parseLeftRight", () => {
+  it("maps each hash to its side of the symmetric difference", () => {
+    const sides = parseLeftRight("<aaa\n>bbb\n<ccc\n");
+    expect(sides.get("aaa")).toBe("left");
+    expect(sides.get("bbb")).toBe("right");
+    expect(sides.get("ccc")).toBe("left");
+    expect(sides.size).toBe(3);
+  });
+
+  it("ignores blank lines and unmarked output", () => {
+    // Defensive: without --left-right git emits bare hashes, which carry no
+    // side and must not be guessed at.
+    expect(parseLeftRight("").size).toBe(0);
+    expect(parseLeftRight("aaa\n\nbbb\n").size).toBe(0);
   });
 
   it("strips 'HEAD -> ' and keeps tags / remote refs", () => {

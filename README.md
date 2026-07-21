@@ -49,6 +49,22 @@ merge line** to the commit that absorbed the work, with a **"merged"** badge in
 both the graph and the branch list. Detection runs off the main thread and is
 cached, and can be disabled on very large repos (`yagi.showMergedBranches`).
 
+### ⇄ Branch comparison
+Check two branches and hit **Compare** for a side-by-side view of what actually
+differs. Work that already exists on both branches is folded away rather than
+listed twice — cherry-picks, rebase replays, and topics squashed into each
+branch separately are matched by patch-id, and a topic merged normally into one
+branch but **squash-merged** into the other is caught by comparing the whole
+topic's changes. Shared commits stay visible but dimmed, so you can tell the
+difference between "nothing unique here" and "something got missed".
+
+### 🎯 Focused graphs
+Select branches in the sidebar and the graph collapses to **those branches'
+lines** — everything merged into them folds into its merge commit, instead of a
+separate lane for every topic branch in your history. Turn on **Linking** to
+also pull in the unselected branches a selected one merges *through*, drawn
+dimmed. Hover any line to see which branch it belongs to.
+
 ### 🔍 Commit details
 Click any commit to see its full message, author, parents, and changed
 files — click a file to open it in VS Code's native diff editor.

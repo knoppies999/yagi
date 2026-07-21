@@ -7,6 +7,8 @@ import {
   Commit,
   CommitDetails,
   CommitFile,
+  CompareCommit,
+  CompareResult,
   FileChange,
   MergedBranch,
   Operation,
@@ -25,12 +27,16 @@ import {
   detectOperationType,
   parseBranches,
   parseCommitDetails,
+  parseCompareLog,
+  parseLeftRight,
   parseLog,
   parsePatchId,
   parsePatchIds,
   parseRebaseTodo,
+  parseRefsAtDistinctCommits,
   parseStatus,
   parseUnmergedStages,
+  pruneCollapsedParents,
 } from "./gitParsing";
 
 export {
@@ -38,6 +44,8 @@ export {
   Commit,
   CommitDetails,
   CommitFile,
+  CompareCommit,
+  CompareResult,
   FileChange,
   MergedBranch,
   Operation,
@@ -104,7 +112,11 @@ export class GitService {
    * branches, so the graph shows only the selected branches and how they
    * relate to one another.
    */
-  async getLog(limit = 200, refs?: string[]): Promise<Commit[]> {
+  async getLog(
+    limit = 200,
+    refs?: string[],
+    firstParent = false
+  ): Promise<Commit[]> {
     // %H hash, %P parents, %an author, %ae email, %at authored unix time,
     // %s subject, %D ref names.
     const fmt = ["%H", "%P", "%an", "%ae", "%at", "%s", "%D"].join(FS) + RS;
@@ -115,13 +127,70 @@ export class GitService {
       // the default (commit-date) order breaks that under clock skew, e.g.
       // after rebases or merging long-lived branches.
       "--date-order",
+      // Collapses everything merged into the given branches down to its merge
+      // commit, so each branch draws as one line instead of dragging in every
+      // topic ever merged into it.
+      ...(firstParent ? ["--first-parent"] : []),
       `--max-count=${limit}`,
       `--pretty=format:${fmt}`,
       // Options must precede the revision list; `--` (end-of-revisions) must be
       // the final token so a branch that shares a path's name isn't misread.
       ...(scoped ? [...refs, "--"] : ["--all"]),
     ]);
-    return parseLog(out);
+    const commits = parseLog(out);
+    // A first-parent walk skips the other parents on purpose; keeping the
+    // references would draw a phantom lane per collapsed merge.
+    return firstParent ? pruneCollapsedParents(commits) : commits;
+  }
+
+  /** Hashes on the first-parent line of each ref — the commits that belong to
+   *  the branches themselves, used to tell them from connecting lines. */
+  async firstParentHashes(refs: string[], limit = 200): Promise<Set<string>> {
+    if (!refs.length) return new Set();
+    const out = await this.run([
+      "rev-list",
+      "--date-order",
+      "--first-parent",
+      `--max-count=${limit}`,
+      ...refs,
+      "--",
+    ]);
+    return new Set(out.split("\n").map((l) => l.trim()).filter(Boolean));
+  }
+
+  /**
+   * Branches that sit *between* two commits: they contain `from` and are
+   * themselves merged into `to`. That's exactly the intermediate a branch
+   * travels through when it reaches another one indirectly (A merged into C,
+   * C merged into B) — without C's line the graph shows A forking off and
+   * never coming back.
+   *
+   * git ANDs `--contains` and `--merged`, so this is one call per pair rather
+   * than a scan over every branch. If `from` isn't an ancestor of `to` at all
+   * the result is naturally empty (A ⊆ C ⊆ B can't hold), so callers don't
+   * need to pre-check ancestry.
+   */
+  async branchesBetween(
+    from: string,
+    to: string
+  ): Promise<{ name: string; tip: string }[]> {
+    const fmt = ["%(objectname)", "%(refname)", "%(refname:short)"].join(FS);
+    try {
+      const out = await this.run([
+        "for-each-ref",
+        "--sort=-committerdate",
+        `--format=${fmt}`,
+        "--contains",
+        from,
+        "--merged",
+        to,
+        "refs/heads",
+        "refs/remotes",
+      ]);
+      return parseRefsAtDistinctCommits(out);
+    } catch {
+      return []; // unrelated histories, or a ref that vanished mid-scan
+    }
   }
 
   /** Working tree status via porcelain v1 (stable, script-friendly). */
@@ -297,6 +366,139 @@ export class GitService {
 
     if (!mergeCommit || mergeCommit === tip) return null;
     return { branch, tip, into: target, mergeCommit, kind };
+  }
+
+  // ---- two-branch comparison ----------------------------------------------
+  // "Unique" here means unique *content*, not a unique SHA. Three layers get
+  // us there, cheapest first:
+  //  1. The `left...right` symmetric difference never lists commits reachable
+  //     from both, so a topic merged from one branch into the other simply
+  //     doesn't show up. Free.
+  //  2. `--cherry-mark` marks commits whose patch-id exists on the other side
+  //     ("="): cherry-picks, rebase replays, and a topic squash-merged into
+  //     each branch separately (both sides are one commit with one patch).
+  //  3. What 1 and 2 miss is a topic merged normally into one branch but
+  //     squash-merged into the other — N commits here, 1 commit there, so no
+  //     per-commit patch-id can match. findSquashedTopics() closes that gap.
+
+  /**
+   * Commits reachable from exactly one of the two branches, split by side and
+   * tagged "equivalent" when git's patch-id says the same change is on the
+   * other branch too. This is the fast pass; `relation: "squashed"` is filled
+   * in afterwards by findSquashedTopics().
+   */
+  async compareBranches(
+    left: string,
+    right: string,
+    limit = 500
+  ): Promise<Omit<CompareResult, "squashChecked">> {
+    const fmt =
+      ["%m", "%H", "%P", "%an", "%ae", "%at", "%s", "%D"].join(FS) + RS;
+    const range = `${left}...${right}`;
+    // Two walks over the identical revision set: --cherry-mark supplies the
+    // "=" flag but *overwrites* the </> side marker, so the side has to come
+    // from a plain --left-right walk. Same options, same order, so the results
+    // line up by hash. (--cherry-mark only marks; unlike --cherry-pick it
+    // never omits commits, so neither walk can drift from the other.)
+    const [logOut, sideOut] = await Promise.all([
+      this.run([
+        "log",
+        "--date-order",
+        "--left-right",
+        "--cherry-mark",
+        `--max-count=${limit}`,
+        `--pretty=format:${fmt}`,
+        range,
+        "--",
+      ]),
+      this.run([
+        "rev-list",
+        "--date-order",
+        "--left-right",
+        `--max-count=${limit}`,
+        range,
+        "--",
+      ]),
+    ]);
+
+    const sides = parseLeftRight(sideOut);
+    const entries = parseCompareLog(logOut);
+    const leftCommits: CompareCommit[] = [];
+    const rightCommits: CompareCommit[] = [];
+    for (const { mark, commit } of entries) {
+      // Prefer the dedicated side walk; fall back to the log's own marker for
+      // anything it didn't cover (only reachable if the two walks disagree).
+      const side =
+        sides.get(commit.hash) ?? (mark === ">" ? "right" : "left");
+      const entry: CompareCommit = {
+        ...commit,
+        relation: mark === "=" ? "equivalent" : "unique",
+      };
+      (side === "right" ? rightCommits : leftCommits).push(entry);
+    }
+    return {
+      left,
+      right,
+      leftCommits,
+      rightCommits,
+      truncated: entries.length >= limit,
+    };
+  }
+
+  /** Commit hashes in `include` that aren't reachable from `exclude`. */
+  async revListRange(include: string, exclude: string): Promise<string[]> {
+    const out = await this.run(["rev-list", include, `^${exclude}`, "--"]);
+    return out.split("\n").map((l) => l.trim()).filter(Boolean);
+  }
+
+  /**
+   * Find commits that only *look* unique because the topic they belong to was
+   * squash-merged into the other branch.
+   *
+   * A merge commit M is the handle: the topic it absorbed is everything from
+   * `M^2` back to `merge-base(M^1, M^2)`, and that range's cumulative diff is
+   * exactly what a squash of the same topic would produce. So one patch-id per
+   * merge commit, looked up in the other branch's first-parent patch-id map —
+   * the same equivalence detectMerged() uses, applied per merge rather than
+   * per branch. On a hit, every commit the topic contributed is shared.
+   *
+   * Returns commit hash → the squash commit on the other branch carrying it.
+   * Bounded by `maxMerges` so a comparison spanning hundreds of merges can't
+   * turn into hundreds of diffs.
+   */
+  async findSquashedTopics(
+    commits: CompareCommit[],
+    otherPatchIds: Map<string, string>,
+    maxMerges = 30
+  ): Promise<Map<string, string>> {
+    const found = new Map<string, string>();
+    if (!otherPatchIds.size) return found;
+    // Only unique commits are worth testing — anything already "equivalent" is
+    // accounted for, and a non-merge commit carries no topic to collapse.
+    const merges = commits
+      .filter((c) => c.relation === "unique" && c.parents.length > 1)
+      .slice(0, maxMerges);
+    const inScope = new Set(commits.map((c) => c.hash));
+
+    for (const merge of merges) {
+      const [mainline, topic] = merge.parents;
+      const base = await this.mergeBase(mainline, topic);
+      if (!base || base === topic) continue;
+      const cumulative = await this.diffPatchId(base, topic);
+      const squash = cumulative ? otherPatchIds.get(cumulative) : undefined;
+      if (!squash) continue;
+      found.set(merge.hash, squash);
+      try {
+        for (const hash of await this.revListRange(topic, mainline)) {
+          // Stay inside the comparison: a topic can reach commits that are on
+          // both branches, and those were never listed as differences.
+          if (inScope.has(hash)) found.set(hash, squash);
+        }
+      } catch {
+        /* the merge commit itself is still a valid finding */
+      }
+    }
+    return found;
   }
 
   stage(path: string) {
