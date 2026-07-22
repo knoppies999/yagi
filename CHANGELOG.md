@@ -2,6 +2,20 @@
 
 All notable changes to YAGI are documented here.
 
+## 1.2.1
+
+**Branch comparison — fixes**
+- A topic **merged (or PR-merged) into both branches** no longer shows up as a
+  difference on each side. Both merge commits are now recognized as bringing in
+  the same shared work — matched by their common merge parent — whichever branch
+  you look from.
+- The "same change landed on both branches under different hashes" detection is
+  now robust when the two branches have **diverged near that change**. Git's
+  patch-id folds in a few lines of surrounding context, so an edit either branch
+  made next to a shared commit could make the *identical* code read as unique on
+  both sides; comparison now also matches on a context-free patch-id, closing
+  that gap for cherry-picks and squash-merges alike.
+
 ## 1.2.0
 
 **Compare two branches**

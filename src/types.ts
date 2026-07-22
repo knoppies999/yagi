@@ -71,11 +71,22 @@ export interface MergedBranch {
  * - "squashed"   — the commit belongs to a topic that was merged normally into
  *                  this branch but landed on the other one collapsed into a
  *                  single squash commit, so no per-commit patch-id matches.
+ * - "merged"     — a merge commit whose merged-in topic (its second parent) was
+ *                  merged into the other branch too. Its SHA is unique, but the
+ *                  work it absorbed is shared. Detected structurally from the
+ *                  shared second parent, not by patch-id, so it holds even when
+ *                  the two branches diverged near the merged code (where
+ *                  patch-id equivalence silently misses — the context lines it
+ *                  hashes no longer match).
  *
- * Only "unique" is a real difference between the branches; the other two are
- * the same work wearing a different hash.
+ * Only "unique" is a real difference between the branches; the rest are the
+ * same work wearing a different hash.
  */
-export type CompareRelation = "unique" | "equivalent" | "squashed";
+export type CompareRelation =
+  | "unique"
+  | "equivalent"
+  | "squashed"
+  | "merged";
 
 export interface CompareCommit extends Commit {
   relation: CompareRelation;

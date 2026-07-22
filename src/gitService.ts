@@ -322,6 +322,39 @@ export class GitService {
     return parsePatchIds(ids);
   }
 
+  /**
+   * Context-free patch-id → commit-hash map for the non-merge commits reachable
+   * from `include` but not `exclude` (i.e. `exclude..include`), newest `limit`.
+   *
+   * The `-U0` is the whole point: with no context lines the id hashes only the
+   * added/removed lines, not the surrounding code. That lets it survive the one
+   * thing the default patch-id can't — a change squash- or cherry-merged into
+   * *both* branches when the branches also diverged *near* it, shifting the
+   * context lines a normal patch-id would fold in. (`--cherry-mark` in
+   * compareBranches uses the default, context-sensitive id and so misses exactly
+   * that.) Filenames are still part of each diff, so the same edit in different
+   * files stays distinct — no false pairing.
+   */
+  async contextFreePatchIds(
+    include: string,
+    exclude: string,
+    limit = 500
+  ): Promise<Map<string, string>> {
+    const diffs = await this.run([
+      "log",
+      "-p",
+      "-U0",
+      "--no-merges",
+      "--no-color",
+      `--max-count=${limit}`,
+      include,
+      `^${exclude}`,
+    ]);
+    if (!diffs.trim()) return new Map();
+    const ids = await this.run(["patch-id", "--stable"], undefined, diffs);
+    return parsePatchIds(ids);
+  }
+
   /** Patch-id of the diff between two commits (the change `a`→`b`), or null if
    *  the diff is empty. Used to hash a branch's cumulative or tip change. */
   async diffPatchId(a: string, b: string): Promise<string | null> {

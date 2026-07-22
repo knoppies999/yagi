@@ -53,10 +53,13 @@ cached, and can be disabled on very large repos (`yagi.showMergedBranches`).
 Check two branches and hit **Compare** for a side-by-side view of what actually
 differs. Work that already exists on both branches is folded away rather than
 listed twice — cherry-picks, rebase replays, and topics squashed into each
-branch separately are matched by patch-id, and a topic merged normally into one
+branch separately are matched by patch-id; a topic merged normally into one
 branch but **squash-merged** into the other is caught by comparing the whole
-topic's changes. Shared commits stay visible but dimmed, so you can tell the
-difference between "nothing unique here" and "something got missed".
+topic's changes; and a topic **merged into both** branches is matched by its
+shared merge parent. This all holds even when the two branches have since
+**diverged around** the shared code. Shared commits stay visible but dimmed, so
+you can tell the difference between "nothing unique here" and "something got
+missed".
 
 ### 🎯 Focused graphs
 Select branches in the sidebar and the graph collapses to **those branches'

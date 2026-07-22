@@ -4,6 +4,8 @@ import {
   RS,
   parseCompareLog,
   parseLeftRight,
+  findCoMerges,
+  matchByPatchId,
   parseLog,
   parseStatus,
   parseUnmergedStages,
@@ -214,6 +216,87 @@ describe("parseLeftRight", () => {
       ["h", "", "Jane", "jane@x.com", "1", subject, ""],
     ]);
     expect(parseLog(out)[0].subject).toBe(subject);
+  });
+});
+
+describe("findCoMerges", () => {
+  // Minimal Commit fixture — findCoMerges only reads hash + parents.
+  const c = (hash: string, parents: string[]): Commit => ({
+    hash,
+    parents,
+    author: "",
+    email: "",
+    date: 0,
+    subject: "",
+    refs: [],
+  });
+
+  it("pairs merges on opposite sides that share a second parent", () => {
+    // The same topic tip `T` merged into both branches: mainline differs
+    // (a1 vs b1) but the second parent is identical.
+    const left = [c("mA", ["a1", "T"]), c("a1", ["c0"])];
+    const right = [c("mB", ["b1", "T"]), c("b1", ["c0"])];
+    const pairs = findCoMerges(left, right);
+    expect(pairs.get("mA")).toBe("mB");
+    expect(pairs.get("mB")).toBe("mA");
+    // Non-merge mainline commits are never paired.
+    expect(pairs.has("a1")).toBe(false);
+    expect(pairs.has("b1")).toBe(false);
+    expect(pairs.size).toBe(2);
+  });
+
+  it("leaves a topic merged into only one branch unpaired", () => {
+    const left = [c("mA", ["a1", "T"])];
+    const right = [c("mB", ["b1", "U"])]; // different topic
+    expect(findCoMerges(left, right).size).toBe(0);
+  });
+
+  it("does not treat a shared first parent (mainline) as a co-merge", () => {
+    // Only secondary parents count; a common mainline is not shared topic work.
+    const left = [c("mA", ["shared", "TA"])];
+    const right = [c("mB", ["shared", "TB"])];
+    expect(findCoMerges(left, right).size).toBe(0);
+  });
+
+  it("pairs octopus merges via any shared secondary parent", () => {
+    const left = [c("mA", ["a1", "X", "T"])];
+    const right = [c("mB", ["b1", "T", "Y"])];
+    const pairs = findCoMerges(left, right);
+    expect(pairs.get("mA")).toBe("mB");
+    expect(pairs.get("mB")).toBe("mA");
+  });
+
+  it("returns an empty map when neither side has merges", () => {
+    const left = [c("a1", ["a0"])];
+    const right = [c("b1", ["b0"])];
+    expect(findCoMerges(left, right).size).toBe(0);
+  });
+});
+
+describe("matchByPatchId", () => {
+  it("pairs commits that share a patch-id across the two sides", () => {
+    // Same change squash-merged into both: identical (context-free) patch-id
+    // `pid`, different commit on each side.
+    const left = new Map([["pid", "sA"], ["onlyL", "a1"]]);
+    const right = new Map([["pid", "sB"], ["onlyR", "b1"]]);
+    const pairs = matchByPatchId(left, right);
+    expect(pairs.get("sA")).toBe("sB");
+    expect(pairs.get("sB")).toBe("sA");
+    // Unshared patch-ids stay unpaired.
+    expect(pairs.has("a1")).toBe(false);
+    expect(pairs.has("b1")).toBe(false);
+    expect(pairs.size).toBe(2);
+  });
+
+  it("returns an empty map when no patch-id is shared", () => {
+    const left = new Map([["p1", "a1"]]);
+    const right = new Map([["p2", "b1"]]);
+    expect(matchByPatchId(left, right).size).toBe(0);
+  });
+
+  it("handles empty inputs", () => {
+    expect(matchByPatchId(new Map(), new Map()).size).toBe(0);
+    expect(matchByPatchId(new Map([["p", "x"]]), new Map()).size).toBe(0);
   });
 });
 

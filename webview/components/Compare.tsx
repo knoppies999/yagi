@@ -14,6 +14,9 @@ const SHARED_LABEL: Record<CompareCommit["relation"], string> = {
   squashed:
     "Part of a topic that landed on the other branch as a single squash " +
     "commit — the code is on both sides.",
+  merged:
+    "A merge of the same commit the other branch also merged — the code is " +
+    "on both sides, even if the branches diverged around it.",
 };
 
 export function Compare({
@@ -83,6 +86,9 @@ export function Compare({
                   {fmtWhen(c.date)} · {c.author} · {c.hash.slice(0, 7)}
                   {c.relation === "squashed" && c.counterpart && (
                     <> · squashed into {c.counterpart.slice(0, 7)}</>
+                  )}
+                  {c.relation === "merged" && c.counterpart && (
+                    <> · also merged on the other branch ({c.counterpart.slice(0, 7)})</>
                   )}
                 </div>
               </div>
