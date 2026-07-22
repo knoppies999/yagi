@@ -17,6 +17,7 @@ import {
   markRebasedIfDiverged,
 } from "./gitOps";
 import { getActiveRoot, resolveActiveRepo } from "./activeRepo";
+import { findCoMerges, matchByPatchId } from "./gitParsing";
 
 // globalState key for the persisted, per-user pane layout.
 const LAYOUT_KEY = "yagi.layout";
@@ -817,15 +818,48 @@ export class YagiPanel {
       const [left, right] = this.branchFilter;
       const base = await this.svc.compareBranches(left, right);
       if (generation !== this.stateGeneration) return; // superseded
-      const result: CompareResult = { ...base, squashChecked: false };
+
+      // Cheapest, context-proof pass first: a merge on each side that absorbed
+      // the same topic (identical second parent) brought in shared work, so
+      // neither is a real difference. This needs no git call — the parents are
+      // already in hand — so it refines even the fast result, and it survives
+      // branches that diverged near the merged code, where patch-id equivalence
+      // silently misses (its hashed context lines no longer match).
+      const coMerged = findCoMerges(base.leftCommits, base.rightCommits);
+      const markMerged = (commits: CompareCommit[]): CompareCommit[] =>
+        commits.map((c) => {
+          const counterpart = coMerged.get(c.hash);
+          return counterpart && c.relation === "unique"
+            ? { ...c, relation: "merged" as const, counterpart }
+            : c;
+        });
+      const result: CompareResult = {
+        ...base,
+        leftCommits: markMerged(base.leftCommits),
+        rightCommits: markMerged(base.rightCommits),
+        squashChecked: false,
+      };
       this.post({ type: "compare", compare: result });
 
-      // The squash pass only pays off when a side has unique merge commits —
-      // a merge is the only thing that can hide a whole topic behind one
-      // commit. Without any, the fast result is already final.
+      // ---- refinement pass (needs git) --------------------------------------
+      // Two independent equivalence checks over the still-`unique` commits,
+      // then one refined post; `squashChecked` flips true when this has run.
       const hasMerges = (commits: CompareCommit[]) =>
         commits.some((c) => c.relation === "unique" && c.parents.length > 1);
-      if (!hasMerges(result.leftCommits) && !hasMerges(result.rightCommits)) {
+      const hasUniqueNonMerge = (commits: CompareCommit[]) =>
+        commits.some((c) => c.relation === "unique" && c.parents.length <= 1);
+
+      // Squash detection keys on a unique merge (the only thing that can hide a
+      // whole topic behind one commit: real-merged here, squash-merged there).
+      const needSquash =
+        hasMerges(result.leftCommits) || hasMerges(result.rightCommits);
+      // Context-free equivalence can only pair a commit with one on the *other*
+      // side, so both sides must have a unique non-merge commit to be worth the
+      // two git walks.
+      const needCtxFree =
+        hasUniqueNonMerge(result.leftCommits) &&
+        hasUniqueNonMerge(result.rightCommits);
+      if (!needSquash && !needCtxFree) {
         this.post({
           type: "compare",
           compare: { ...result, squashChecked: true },
@@ -833,24 +867,43 @@ export class YagiPanel {
         return;
       }
 
-      const [leftIds, rightIds] = await Promise.all([
-        this.firstParentPatchIdsCached(left),
-        this.firstParentPatchIdsCached(right),
-      ]);
-      if (generation !== this.stateGeneration) return;
-      // Each side's topics are looked up in the *other* branch's patch-ids.
-      const [leftSquashed, rightSquashed] = await Promise.all([
-        this.svc.findSquashedTopics(result.leftCommits, rightIds),
-        this.svc.findSquashedTopics(result.rightCommits, leftIds),
-      ]);
-      if (generation !== this.stateGeneration) return;
+      // Squash-merge detection: one patch-id per unique merge, looked up in the
+      // other branch's first-parent line.
+      let leftSquashed = new Map<string, string>();
+      let rightSquashed = new Map<string, string>();
+      if (needSquash) {
+        const [leftIds, rightIds] = await Promise.all([
+          this.firstParentPatchIdsCached(left),
+          this.firstParentPatchIdsCached(right),
+        ]);
+        if (generation !== this.stateGeneration) return;
+        [leftSquashed, rightSquashed] = await Promise.all([
+          this.svc.findSquashedTopics(result.leftCommits, rightIds),
+          this.svc.findSquashedTopics(result.rightCommits, leftIds),
+        ]);
+        if (generation !== this.stateGeneration) return;
+      }
 
-      // Each match is a fact about *both* sides, so it has to be applied in
-      // both directions. Scanning main's merge finds "the squash commit on
-      // side absorbed this topic" — which also makes that squash commit
-      // shared, even though side has no merge commit of its own to find it
-      // from. Without this the same work reads as shared on one side and
-      // unique on the other.
+      // Context-free equivalence: match `-U0` patch-ids across the two exclusive
+      // ranges. Catches a change squash- or cherry-merged into both branches
+      // even when they diverged around it — where the default-context patch-id
+      // (compareBranches' `--cherry-mark`) silently fails.
+      let ctxFreePairs = new Map<string, string>();
+      if (needCtxFree) {
+        const [leftCf, rightCf] = await Promise.all([
+          this.svc.contextFreePatchIds(left, right),
+          this.svc.contextFreePatchIds(right, left),
+        ]);
+        if (generation !== this.stateGeneration) return;
+        ctxFreePairs = matchByPatchId(leftCf, rightCf);
+      }
+
+      // Squash findings are a fact about *both* sides, so they apply in both
+      // directions. Scanning one side's merge finds "the squash commit on the
+      // other side absorbed this topic" — which also makes that squash commit
+      // shared, even though it has no merge commit of its own to be found from.
+      // Without inverting, the same work reads shared on one side, unique on the
+      // other.
       const invert = (found: Map<string, string>) => {
         const back = new Map<string, string>();
         for (const [hash, counterpart] of found) {
@@ -862,14 +915,20 @@ export class YagiPanel {
       };
       const apply = (
         commits: CompareCommit[],
-        found: Map<string, string>,
-        fromOther: Map<string, string>
+        squashed: Map<string, string>,
+        squashedFromOther: Map<string, string>
       ) =>
         commits.map((c) => {
-          const counterpart = found.get(c.hash) ?? fromOther.get(c.hash);
-          return counterpart && c.relation === "unique"
-            ? { ...c, relation: "squashed" as const, counterpart }
-            : c;
+          if (c.relation !== "unique") return c; // already shared — leave it
+          const squash = squashed.get(c.hash) ?? squashedFromOther.get(c.hash);
+          if (squash) {
+            return { ...c, relation: "squashed" as const, counterpart: squash };
+          }
+          const equiv = ctxFreePairs.get(c.hash);
+          if (equiv) {
+            return { ...c, relation: "equivalent" as const, counterpart: equiv };
+          }
+          return c;
         });
       this.post({
         type: "compare",

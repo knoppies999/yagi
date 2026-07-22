@@ -86,6 +86,72 @@ export function parseLeftRight(out: string): Map<string, "left" | "right"> {
 }
 
 /**
+ * Merge commits on opposite sides of a comparison that merged the *same* topic
+ * — their second parent (the merged-in tip) is one and the same commit. Both
+ * branches absorbed identical work, so neither merge is a real content
+ * difference, however far the branches have otherwise diverged.
+ *
+ * This is the reachability-based companion to patch-id equivalence. `git`'s
+ * patch-id hashes the merge diff *including its context lines*, so any change
+ * on either branch near the merged code shifts those context lines and the two
+ * ids no longer match — the equivalence is missed and the same feature reads as
+ * unique on both sides. A shared second-parent SHA can't drift like that.
+ *
+ * Returns a symmetric map: each paired merge's hash → its counterpart merge on
+ * the other side. Non-merges and unmatched merges are absent. Secondary parents
+ * (`parents[1..]`) are all considered so octopus merges still pair; first writer
+ * wins so one topic maps to one merge per side.
+ */
+export function findCoMerges(
+  left: Commit[],
+  right: Commit[]
+): Map<string, string> {
+  const rightBySecondary = new Map<string, string>();
+  for (const c of right) {
+    for (const parent of c.parents.slice(1)) {
+      if (!rightBySecondary.has(parent)) rightBySecondary.set(parent, c.hash);
+    }
+  }
+  const pairs = new Map<string, string>();
+  for (const c of left) {
+    for (const parent of c.parents.slice(1)) {
+      const counterpart = rightBySecondary.get(parent);
+      if (counterpart) {
+        pairs.set(c.hash, counterpart);
+        pairs.set(counterpart, c.hash);
+        break;
+      }
+    }
+  }
+  return pairs;
+}
+
+/**
+ * Cross-match two patch-id → commit-hash maps, one per side of a comparison:
+ * where both sides carry the same patch-id, those two commits are the same
+ * change under different hashes. Returns a symmetric commit-hash → counterpart
+ * map (each paired commit points at the other).
+ *
+ * Fed context-free (`-U0`) patch-ids, this pairs a change squash- or
+ * cherry-merged into both branches even when they diverged around it — the case
+ * git's own `--cherry-mark` (default-context patch-id) silently misses.
+ */
+export function matchByPatchId(
+  leftIds: Map<string, string>,
+  rightIds: Map<string, string>
+): Map<string, string> {
+  const pairs = new Map<string, string>();
+  for (const [patchId, leftHash] of leftIds) {
+    const rightHash = rightIds.get(patchId);
+    if (rightHash) {
+      pairs.set(leftHash, rightHash);
+      pairs.set(rightHash, leftHash);
+    }
+  }
+  return pairs;
+}
+
+/**
  * Parse `git status --porcelain=v1 -z` into file changes. The `resolvable`
  * flag is layered on by GitService (it needs live operation + cache state),
  * so this returns everything except that field.
